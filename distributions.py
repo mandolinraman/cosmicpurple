@@ -5,7 +5,36 @@
 import numpy as np
 
 
-class Multinomial:
+class Distribution:
+    """_summary_"""
+
+    def __init__(self):
+        pass
+
+    def probability(self, point):
+        """_summary_
+
+        Args:
+            point (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        return np.exp(self.log_probability(point))
+
+    def log_probability(self, point):
+        """_summary_
+
+        Args:
+            point (_type_): _description_
+
+        Raises:
+            NotImplementedError: _description_
+        """
+        raise NotImplementedError
+
+
+class Multinomial(Distribution):
     """_summary_"""
 
     def __init__(self, pmf: np.ndarray):
@@ -14,10 +43,13 @@ class Multinomial:
         Args:
             pmf (nd.array): _description_
         """
+
+        super().__init__()
+
         self.num = len(pmf)
         self.log_pmf = np.log(pmf / np.sum(pmf))
 
-    def log_probability(self, i) -> float:
+    def log_probability(self, point) -> float:
         """_summary_
 
         Args:
@@ -26,10 +58,10 @@ class Multinomial:
         Returns:
             float: _description_
         """
-        return self.log_pmf[int(i)]
+        return self.log_pmf[int(point)]
 
 
-class Normal:
+class Normal(Distribution):
     """_summary_"""
 
     def __init__(self, mean: float, var: float):
@@ -38,6 +70,8 @@ class Normal:
         Args:
             pmf (nd.array): _description_
         """
+
+        super().__init__()
 
         self.mean = mean
         self.var = var
@@ -57,7 +91,7 @@ class Normal:
         return -self.const - self.half_inv_var * (point - self.mean) ** 2
 
 
-class AutoRegressiveNormal:
+class AutoRegressiveNormal(Distribution):
     """_summary_"""
 
     def __init__(self, mean: float, var: float, predictor: np.ndarray):
@@ -66,6 +100,8 @@ class AutoRegressiveNormal:
         Args:
             pmf (nd.array): _description_
         """
+
+        super().__init__()
 
         self.mean = mean
         self.var = var
@@ -86,7 +122,7 @@ class AutoRegressiveNormal:
         return -self.const - self.half_inv_var * (error - self.mean) ** 2
 
 
-class MultivariateGaussian:
+class MultivariateGaussian(Distribution):
     """_summary_"""
 
     def __init__(self, mean: np.ndarray, cov: np.ndarray):
@@ -95,6 +131,8 @@ class MultivariateGaussian:
         Args:
             pmf (nd.array): _description_
         """
+
+        super().__init__()
 
         self.mean = mean
         self.cov = cov
