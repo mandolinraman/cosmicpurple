@@ -1,28 +1,74 @@
-"""Some utilties for computing softmax and sampling PMFs. 
+"""Some utilties for computing softmax and sampling softmax pmfs
+in a numerically stable way.
 """
-
 
 import numpy as np
 from scipy.special import logsumexp
 
 
-# Reducer for single destination
-class Reducer:
+class BaseReducer:
     """_summary_"""
 
-    def __init__(self, num: int):
+    def __init__(self, num: int, temperature: float):
         """_summary_
 
         Args:
             num (int): _description_
         """
         assert num >= 1
-
-        self.pmf = np.ones(num) / num
         self.num = num
-        self.winner = 0
+        self.log_softmax_pmf = np.full(self.num, -np.nan)
 
-    def reduce(self, metrics: np.ndarray) -> float:
+        assert temperature >= 0
+        self.temperature = temperature
+
+    @property
+    def softmax_pmf(self):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        return np.exp(self.log_softmax_pmf)
+
+    def hard_reduce(self, metrics, **kwargs):
+        """_summary_"""
+        raise NotImplementedError
+
+    def soft_reduce(self, metrics, **kwargs):
+        """_summary_"""
+        raise NotImplementedError
+
+    def apply(self, metrics, **kwargs):
+        """_summary_
+
+        Args:
+            metric (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        if self.temperature == 0:
+            return self.hard_reduce(metrics, **kwargs)
+        if self.temperature == 1:
+            return self.soft_reduce(metrics, **kwargs)
+
+
+# Reducer for single destination
+class Reducer(BaseReducer):
+    """_summary_"""
+
+    def __init__(self, num: int, temperature: float = 1.0):
+        """_summary_
+
+        Args:
+            num (int): _description_
+        """
+        super().__init__(num, temperature)
+        self.winner = -1
+        self.output = np.nan
+
+    def hard_reduce(self, metrics: np.ndarray, **kwargs) -> float:
         """_summary_
 
         Args:
@@ -35,16 +81,15 @@ class Reducer:
         assert len(metrics) == self.num
 
         self.winner = np.argmax(metrics)
-        return metrics[self.winner]
+        self.output = metrics[self.winner]
+        return self.output, self.winner
 
-    def soft_reduce(
-        self, metrics: np.ndarray, compute_pmf: bool = False
-    ) -> float:
+    def soft_reduce(self, metrics: np.ndarray, **kwargs) -> float:
         """_summary_
 
         Args:
             metrics (_type_): _description_
-            compute_pmf (bool, optional): _description_. Defaults to False.
+            compute_softmax (bool, optional): _description_. Defaults to False.
 
         Returns:
             _type_: _description_
@@ -52,22 +97,23 @@ class Reducer:
 
         assert len(metrics) == self.num
 
-        reduced = logsumexp(metrics)  # softmax(metrics)
-        if compute_pmf:
+        self.output = logsumexp(metrics)  # softmax(metrics)
+        if kwargs.get("compute_softmax", False):
             # first deal with corner cases:
-            if reduced == np.inf:
+            if self.output == np.inf:
                 temp = metrics == np.inf
-                self.pmf = temp / sum(temp)
-            elif reduced == -np.inf:
+                self.log_softmax_pmf.fill(-np.inf)
+                self.log_softmax_pmf[temp] = -np.log(sum(temp))
+            elif self.output == -np.inf:
                 # all metrics must be -np.inf
-                self.pmf.fill(1 / self.num)
+                self.log_softmax_pmf.fill(-np.log(self.num))
             else:
-                # normal case
-                self.pmf = np.exp(metrics - reduced)
+                # normal case (all finite)
+                self.log_softmax_pmf = metrics - self.output
 
-        return reduced
+        return self.output
 
-    def sample_pmf(self):
+    def sample_softmax(self):
         """_summary_
 
         Args:
@@ -78,89 +124,95 @@ class Reducer:
         """
 
         urand = np.random.rand()
-        for index, prob in enumerate(self.pmf):
+        self.winner = self.num - 1
+        for index, prob in enumerate(self.softmax_pmf):
             urand -= prob
             if urand < 0:
-                return index
-        return self.num - 1
+                self.winner = index
+                break
+
+        return self.winner
 
 
 # Reducer for multiple destinations
-class MultiReducer:
+class MultiReducer(BaseReducer):
     """_summary_"""
 
-    def __init__(self, num_buckets: int, buckets: np.ndarray):
+    def __init__(
+        self, num_buckets: int, buckets: np.ndarray, temperature: float = 1.0
+    ):
         """Initialize a class instance
 
         Args:
             buckets (_type_): Bucket indices
         """
-        assert min(buckets) >= 0 and max(buckets) < num_buckets
+        super().__init__(len(buckets), temperature)
 
-        self.num = len(buckets)
+        assert min(buckets) >= 0 and max(buckets) < num_buckets
         self.buckets = buckets
         self.num_buckets = num_buckets
-        self.winners = np.zeros(self.num_buckets)
-        self.pmf = np.ones(self.num) / self.num
+        self.output = np.empty(self.num_buckets)  # fall back for output
+        self.winners = np.empty(self.num_buckets, int)  # fallback for winners
 
-    def reduce(self, metrics: np.ndarray, reduced: np.ndarray):
+    def hard_reduce(self, metrics: np.ndarray, **kwargs):
         """_summary_
 
         Args:
             metrics (_type_): _description_
             reduced (_type_): _description_
         """
+        output = kwargs.get("output", self.output)
+        winners = kwargs.get("winners", self.winners)
         assert len(metrics) == self.num
-        assert len(reduced) == self.num_buckets
+        assert len(output) == self.num_buckets
 
-        reduced.fill(-np.inf)
+        output.fill(-np.inf)
         for index, (metric, bucket) in enumerate(zip(metrics, self.buckets)):
-            if metric > reduced[bucket]:
-                reduced[bucket] = metric
-                self.winners[bucket] = index
+            if metric > output[bucket]:
+                output[bucket] = metric
+                winners[bucket] = index
 
-    def soft_reduce(
-        self, metrics: np.ndarray, reduced: np.ndarray, compute_pmf=False
-    ):
+    def soft_reduce(self, metrics: np.ndarray, **kwargs):
         """_summary_
 
         Args:
             metrics (_type_): _description_
             reduced (_type_): _description_
-            compute_pmf (bool, optional): _description_. Defaults to False.
+            compute_softmax (bool, optional): _description_. Defaults to False.
         """
-
+        output = kwargs.get("output", self.output)
         assert len(metrics) == self.num
-        assert len(reduced) == self.num_buckets
+        assert len(output) == self.num_buckets
 
-        reduced.fill(-np.inf)
-        gamma = np.zeros_like(reduced)
+        output.fill(-np.inf)
+        gamma = np.zeros_like(output)
         for metric, bucket in zip(metrics, self.buckets):
             # to prevent nan warnings when both terms are +/- np.inf:
-            if reduced[bucket] == metric:
+            if output[bucket] == metric:
                 delta = 0
             else:
-                delta = reduced[bucket] - metric
+                delta = output[bucket] - metric
 
             if delta < 0:
                 gamma[bucket] = gamma[bucket] * np.exp(delta) + 1.0
-                reduced[bucket] = metric
+                output[bucket] = metric
             else:
                 gamma[bucket] += np.exp(-delta)
 
-        reduced += np.log(gamma)  # softMax operation
+        log_gamma = np.log(gamma)
+        output += log_gamma  # softMax operation
 
-        if compute_pmf:
+        if kwargs.get("compute_softmax", False):
             for index, (metric, bucket) in enumerate(
                 zip(metrics, self.buckets)
             ):
-                self.pmf[index] = (
-                    1.0 / gamma[bucket]
-                    if reduced[bucket] == metric
-                    else np.exp(metric - reduced[bucket])
+                self.log_softmax_pmf[index] = (
+                    -log_gamma[bucket]
+                    if output[bucket] == metric
+                    else metric - output[bucket]
                 )
 
-    def sample_pmf(self, samples):
+    def sample_softmax(self, **kwargs):
         """_summary_
 
         Args:
@@ -169,15 +221,17 @@ class MultiReducer:
         Returns:
             _type_: _description_
         """
+        winners = kwargs.get("winners", self.winners)
+        assert len(winners) == self.num_buckets
 
-        assert len(samples) == self.num_buckets
-
-        samples.fill(-1)
+        winners.fill(-1)
         urand = np.random.rand(self.num_buckets)
-        for index, (prob, bucket) in enumerate(zip(self.pmf, self.buckets)):
-            if samples[bucket] != -1:
+        for index, (prob, bucket) in enumerate(
+            zip(self.softmax_pmf, self.buckets)
+        ):
+            if winners[bucket] != -1:
                 continue
 
             urand[bucket] -= prob
             if urand[bucket] < 0:
-                samples[bucket] = index
+                winners[bucket] = index

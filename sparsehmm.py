@@ -45,11 +45,6 @@ class SparseHMM:
         assert set(emitter_map) == set(range(self.num_emitters))
         self.emitter_map = emitter_map
 
-        # max/softmax reducers:
-        self.forward_reducer = MultiReducer(self.num_states, self.to_state)
-        self.backward_reducer = MultiReducer(self.num_states, self.to_state)
-        self.reducer = Reducer(self.num_states)
-
     def _compute_log_emission_prob(self, obs, log_emission_prob):
         # compute all emission probabilities
         for j, emitter in enumerate(self.emitters):
@@ -58,7 +53,7 @@ class SparseHMM:
     def viterbi(
         self,
         obs: np.ndarray,
-        sample: bool = False,
+        temperature: float = 0,
         iprob: np.ndarray = None,
         fprob: np.ndarray = None,
     ):
@@ -82,6 +77,12 @@ class SparseHMM:
 
         num_obs = len(obs)
 
+        # max/softmax reducers:
+        forward_reducer = MultiReducer(
+            self.num_states, self.to_state, temperature
+        )
+        reducer = Reducer(self.num_states, temperature)
+
         # allocate space for trace back
         winning_edge = np.zeros((num_obs, self.num_states), int)
         metric = np.log(iprob)
@@ -99,26 +100,26 @@ class SparseHMM:
 
             # if we want to sample the APP distribution, we apply
             # softmax to the converging metrics, rather than a max:
-            if sample:
+            if temperature > 0:
                 # compute softmax and sample from softmax distribution
-                self.forward_reducer.soft_reduce(
-                    pathmetric, metric, compute_pmf=True
+                forward_reducer.apply(
+                    pathmetric, output=metric, compute_pmf=True
                 )
-                self.forward_reducer.sample_pmf(winning_edge[i])
+                forward_reducer.sample_softmax(winners=winning_edge[i])
             else:
                 # compute simple max of converging metrics:
-                self.forward_reducer.reduce(pathmetric, metric)
-                winning_edge[i] = self.forward_reducer.winners
+                forward_reducer.apply(
+                    pathmetric, output=metric, winners=winning_edge[i]
+                )
 
         metric += np.log(fprob)
 
         # pick final state with least metric
-        if sample:
-            _ = self.reducer.soft_reduce(metric, compute_pmf=True)
-            ml_state = self.reducer.sample_pmf()
+        if temperature > 0:
+            _ = reducer.apply(metric, compute_pmf=True)
+            ml_state = reducer.sample_softmax()
         else:
-            _ = self.reducer.reduce(metric)
-            ml_state = self.reducer.winner  # np.argmin(metric)
+            _, ml_state = reducer.apply(metric)
 
         # trace back to decode bits
         ml_seq = np.zeros(num_obs, int)
@@ -157,6 +158,10 @@ class SparseHMM:
 
         num_obs = len(obs)
 
+        # max/softmax reducers:
+        forward_reducer = MultiReducer(self.num_states, self.to_state)
+        reducer = Reducer(self.num_states)
+
         # allocate space
         metric = np.log(iprob)
         log_emission_prob = np.zeros(self.num_emitters)
@@ -172,10 +177,10 @@ class SparseHMM:
             # and we don't have an emission term.
 
             # apply softmax to the converging metrics:
-            self.forward_reducer.soft_reduce(pathmetric, metric)
+            forward_reducer.apply(pathmetric, output=metric)
 
         metric += np.log(fprob)
-        return self.reducer.soft_reduce(metric)
+        return reducer.apply(metric)
 
     def forward_backward(
         self,
@@ -205,6 +210,11 @@ class SparseHMM:
 
         num_obs = len(obs)
 
+        # max/softmax reducers:
+        forward_reducer = MultiReducer(self.num_states, self.to_state)
+        backward_reducer = MultiReducer(self.num_states, self.from_state)
+        reducer = Reducer(self.num_states)
+
         # compute and cache the emission probabilities
         log_emission_prob = np.zeros((num_obs, self.num_emitters))
         for i in range(num_obs):
@@ -225,7 +235,7 @@ class SparseHMM:
                 + self.log_trans_prob
                 + log_emission_prob[i, self.emitter_map]
             )
-            self.backward_reducer.soft_reduce(pathmetric, metric)
+            backward_reducer.apply(pathmetric, output=metric)
 
         # forward pass
         # log_alpha = np.zeros((num_obs, self.num_states))
@@ -239,14 +249,15 @@ class SparseHMM:
             )
 
             temp = pathmetric + log_beta[i, self.to_state]
-            log_app[:, i] = temp - self.reducer.soft_reduce(temp)
-            self.forward_reducer.soft_reduce(pathmetric, metric)
+            _ = reducer.apply(temp, compute_pmf=True)
+            log_app[:, i] = reducer.log_softmax_pmf
+            forward_reducer.apply(pathmetric, output=metric)
 
             # if we wanted to track the alphas too, we'd need this:
             # log_alpha[i, : ] = metric
 
         # entropy can be computed for almost no additional cost:
         metric += np.log(fprob)
-        log_probability = self.reducer.soft_reduce(metric)
+        log_probability = reducer.apply(metric)
 
         return log_app, log_probability
