@@ -34,7 +34,7 @@ class Distribution:
         raise NotImplementedError
 
 
-class Multinomial(Distribution):
+class Discrete(Distribution):
     """_summary_"""
 
     def __init__(self, pmf: np.ndarray):

@@ -101,7 +101,9 @@ class SparseHMM:
             # softmax to the converging metrics, rather than a max:
             if sample:
                 # compute softmax and sample from softmax distribution
-                self.forward_reducer.soft_reduce(pathmetric, metric, compute_pmf=True)
+                self.forward_reducer.soft_reduce(
+                    pathmetric, metric, compute_pmf=True
+                )
                 self.forward_reducer.sample_pmf(winning_edge[i])
             else:
                 # compute simple max of converging metrics:
@@ -127,7 +129,7 @@ class SparseHMM:
 
         return ml_seq
 
-    def entropy(
+    def log_probability(
         self,
         obs: np.ndarray,
         iprob: np.ndarray = None,
@@ -173,10 +175,13 @@ class SparseHMM:
             self.forward_reducer.soft_reduce(pathmetric, metric)
 
         metric += np.log(fprob)
-        return -1 * self.reducer.soft_reduce(metric) / num_obs / np.log(2.0)
+        return self.reducer.soft_reduce(metric)
 
     def forward_backward(
-        self, obs: np.ndarray, iprob: np.ndarray = None, fprob: np.ndarray = None
+        self,
+        obs: np.ndarray,
+        iprob: np.ndarray = None,
+        fprob: np.ndarray = None,
     ):
         """_summary_
 
@@ -242,6 +247,6 @@ class SparseHMM:
 
         # entropy can be computed for almost no additional cost:
         metric += np.log(fprob)
-        entropy = -1 * self.reducer.soft_reduce(metric) / num_obs / np.log(2.0)
+        log_probability = self.reducer.soft_reduce(metric)
 
-        return log_app, entropy
+        return log_app, log_probability
