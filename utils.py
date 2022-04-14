@@ -50,8 +50,7 @@ class BaseReducer:
         """
         if self.temperature == 0:
             return self.hard_reduce(metrics, **kwargs)
-        if self.temperature == 1:
-            return self.soft_reduce(metrics, **kwargs)
+        return self.soft_reduce(metrics, **kwargs)
 
 
 # Reducer for single destination
@@ -97,11 +96,16 @@ class Reducer(BaseReducer):
 
         assert len(metrics) == self.num
 
-        self.output = logsumexp(metrics)  # softmax(metrics)
+        if self.temperature != 1:
+            scaled_metrics = metrics / self.temperature
+        else:
+            scaled_metrics = metrics
+
+        self.output = logsumexp(scaled_metrics)  # softmax(metrics)
         if kwargs.get("compute_softmax", False):
             # first deal with corner cases:
             if self.output == np.inf:
-                temp = metrics == np.inf
+                temp = scaled_metrics == np.inf
                 self.log_softmax_pmf.fill(-np.inf)
                 self.log_softmax_pmf[temp] = -np.log(sum(temp))
             elif self.output == -np.inf:
@@ -109,7 +113,10 @@ class Reducer(BaseReducer):
                 self.log_softmax_pmf.fill(-np.log(self.num))
             else:
                 # normal case (all finite)
-                self.log_softmax_pmf = metrics - self.output
+                self.log_softmax_pmf = scaled_metrics - self.output
+
+        if self.temperature != 1:
+            self.output *= self.temperature
 
         return self.output
 
@@ -184,9 +191,14 @@ class MultiReducer(BaseReducer):
         assert len(metrics) == self.num
         assert len(output) == self.num_buckets
 
+        if self.temperature != 1:
+            scaled_metrics = metrics / self.temperature
+        else:
+            scaled_metrics = metrics
+
         output.fill(-np.inf)
         gamma = np.zeros_like(output)
-        for metric, bucket in zip(metrics, self.buckets):
+        for metric, bucket in zip(scaled_metrics, self.buckets):
             # to prevent nan warnings when both terms are +/- np.inf:
             if output[bucket] == metric:
                 delta = 0
@@ -204,13 +216,16 @@ class MultiReducer(BaseReducer):
 
         if kwargs.get("compute_softmax", False):
             for index, (metric, bucket) in enumerate(
-                zip(metrics, self.buckets)
+                zip(scaled_metrics, self.buckets)
             ):
                 self.log_softmax_pmf[index] = (
                     -log_gamma[bucket]
                     if output[bucket] == metric
                     else metric - output[bucket]
                 )
+
+        if self.temperature != 1:
+            output *= self.temperature
 
     def sample_softmax(self, **kwargs):
         """_summary_
