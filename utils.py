@@ -39,7 +39,7 @@ class BaseReducer:
         """_summary_"""
         raise NotImplementedError
 
-    def apply(self, metrics, **kwargs):
+    def reduce(self, metrics, **kwargs):
         """_summary_
 
         Args:
@@ -151,8 +151,8 @@ class MultiReducer(BaseReducer):
         assert min(buckets) >= 0 and max(buckets) < num_buckets
         self.buckets = buckets
         self.num_buckets = num_buckets
-        self.output = np.empty(self.num_buckets)  # fall back for output
-        self.winners = np.empty(self.num_buckets, int)  # fallback for winners
+        self.output = np.full(num_buckets, np.nan)  # fall back for output
+        self.winners = np.full(num_buckets, -1, int)  # fallback for winners
 
     def hard_reduce(self, metrics: np.ndarray, **kwargs):
         """_summary_

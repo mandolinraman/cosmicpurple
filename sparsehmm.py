@@ -102,13 +102,13 @@ class SparseHMM:
             # softmax to the converging metrics, rather than a max:
             if temperature > 0:
                 # compute softmax and sample from softmax distribution
-                forward_reducer.apply(
+                forward_reducer.reduce(
                     pathmetric, output=metric, compute_pmf=True
                 )
                 forward_reducer.sample_softmax(winners=winning_edge[i])
             else:
                 # compute simple max of converging metrics:
-                forward_reducer.apply(
+                forward_reducer.reduce(
                     pathmetric, output=metric, winners=winning_edge[i]
                 )
 
@@ -116,10 +116,10 @@ class SparseHMM:
 
         # pick final state with least metric
         if temperature > 0:
-            _ = reducer.apply(metric, compute_pmf=True)
+            _ = reducer.reduce(metric, compute_pmf=True)
             ml_state = reducer.sample_softmax()
         else:
-            _, ml_state = reducer.apply(metric)
+            _, ml_state = reducer.reduce(metric)
 
         # trace back to decode bits
         ml_seq = np.zeros(num_obs, int)
@@ -177,10 +177,10 @@ class SparseHMM:
             # and we don't have an emission term.
 
             # apply softmax to the converging metrics:
-            forward_reducer.apply(pathmetric, output=metric)
+            forward_reducer.reduce(pathmetric, output=metric)
 
         metric += np.log(fprob)
-        return reducer.apply(metric)
+        return reducer.reduce(metric)
 
     def forward_backward(
         self,
@@ -235,7 +235,7 @@ class SparseHMM:
                 + self.log_trans_prob
                 + log_emission_prob[i, self.emitter_map]
             )
-            backward_reducer.apply(pathmetric, output=metric)
+            backward_reducer.reduce(pathmetric, output=metric)
 
         # forward pass
         # log_alpha = np.zeros((num_obs, self.num_states))
@@ -249,15 +249,15 @@ class SparseHMM:
             )
 
             temp = pathmetric + log_beta[i, self.to_state]
-            _ = reducer.apply(temp, compute_pmf=True)
+            _ = reducer.reduce(temp, compute_pmf=True)
             log_app[:, i] = reducer.log_softmax_pmf
-            forward_reducer.apply(pathmetric, output=metric)
+            forward_reducer.reduce(pathmetric, output=metric)
 
             # if we wanted to track the alphas too, we'd need this:
             # log_alpha[i, : ] = metric
 
         # entropy can be computed for almost no additional cost:
         metric += np.log(fprob)
-        log_probability = reducer.apply(metric)
+        log_probability = reducer.reduce(metric)
 
         return log_app, log_probability

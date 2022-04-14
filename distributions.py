@@ -58,6 +58,8 @@ class Discrete(Distribution):
         Returns:
             float: _description_
         """
+        if isinstance(point, np.ndarray):
+            return self.log_pmf[point.astype(int)]
         return self.log_pmf[int(point)]
 
 
