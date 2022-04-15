@@ -15,6 +15,8 @@ class SparseHMM:
         trans_prob: np.ndarray,
         emitters: np.ndarray,
         emitter_map: np.ndarray = None,
+        iprob: np.ndarray = None,
+        fprob: np.ndarray = None,
     ):
         """_summary_
 
@@ -22,6 +24,8 @@ class SparseHMM:
             adjList (_type_): _description_
             emission (_type_): _description_
             emission_map (_type_): _description_
+            iprob (_type_, optional): _description_. Defaults to None.
+            fprob (_type_, optional): _description_. Defaults to None.
         """
 
         # topology
@@ -45,27 +49,7 @@ class SparseHMM:
         assert set(emitter_map) == set(range(self.num_emitters))
         self.emitter_map = emitter_map
 
-    def _compute_log_emission_prob(self, obs, log_emission_prob):
-        # compute all emission probabilities
-        for j, emitter in enumerate(self.emitters):
-            log_emission_prob[j] = emitter.log_probability(obs)
-
-    def viterbi(
-        self,
-        obs: np.ndarray,
-        temperature: float = 0,
-        iprob: np.ndarray = None,
-        fprob: np.ndarray = None,
-    ):
-        """_summary_
-
-        Args:
-            s (_type_): _description_
-            sample (bool, optional): _description_. Defaults to False.
-            iprob (_type_, optional): _description_. Defaults to None.
-            fprob (_type_, optional): _description_. Defaults to None.
-        """
-
+        # validate iprob, fprob
         if iprob is None:
             iprob = np.ones(self.num_states) / self.num_states
 
@@ -74,6 +58,22 @@ class SparseHMM:
 
         assert len(iprob) == self.num_states
         assert len(fprob) == self.num_states
+
+        self.iprob = iprob
+        self.fprob = fprob
+
+    def _compute_log_emission_prob(self, obs, log_emission_prob):
+        # compute all emission probabilities
+        for j, emitter in enumerate(self.emitters):
+            log_emission_prob[j] = emitter.log_probability(obs)
+
+    def viterbi(self, obs: np.ndarray, temperature: float = 0):
+        """_summary_
+
+        Args:
+            s (_type_): _description_
+            sample (bool, optional): _description_. Defaults to False.
+        """
 
         num_obs = len(obs)
 
@@ -85,7 +85,7 @@ class SparseHMM:
 
         # allocate space for trace back
         winning_edge = np.zeros((num_obs, self.num_states), int)
-        metric = np.log(iprob)
+        metric = np.log(self.iprob)
         log_emission_prob = np.zeros(self.num_emitters)
 
         # start iterations
@@ -112,7 +112,7 @@ class SparseHMM:
                     pathmetric, output=metric, winners=winning_edge[i]
                 )
 
-        metric += np.log(fprob)
+        metric += np.log(self.fprob)
 
         # pick final state with least metric
         if temperature > 0:
@@ -130,31 +130,15 @@ class SparseHMM:
 
         return ml_seq
 
-    def log_probability(
-        self,
-        obs: np.ndarray,
-        iprob: np.ndarray = None,
-        fprob: np.ndarray = None,
-    ):
+    def log_probability(self, obs: np.ndarray):
         """_summary_
 
         Args:
             obs (_type_): _description_
-            iprob (_type_, optional): _description_. Defaults to None.
-            fprob (_type_, optional): _description_. Defaults to None.
 
         Returns:
             _type_: _description_
         """
-
-        if iprob is None:
-            iprob = np.ones(self.num_states) / self.num_states
-
-        if fprob is None:
-            fprob = np.ones(self.num_states)
-
-        assert len(iprob) == self.num_states
-        assert len(fprob) == self.num_states
 
         num_obs = len(obs)
 
@@ -163,7 +147,7 @@ class SparseHMM:
         reducer = Reducer(self.num_states)
 
         # allocate space
-        metric = np.log(iprob)
+        metric = np.log(self.iprob)
         log_emission_prob = np.zeros(self.num_emitters)
 
         # start iterations
@@ -179,34 +163,18 @@ class SparseHMM:
             # apply softmax to the converging metrics:
             forward_reducer.reduce(pathmetric, output=metric)
 
-        metric += np.log(fprob)
+        metric += np.log(self.fprob)
         return reducer.reduce(metric)
 
-    def forward_backward(
-        self,
-        obs: np.ndarray,
-        iprob: np.ndarray = None,
-        fprob: np.ndarray = None,
-    ):
+    def forward_backward(self, obs: np.ndarray):
         """_summary_
 
         Args:
             obs (np.ndarray): _description_
-            iprob (np.ndarray, optional): _description_. Defaults to None.
-            fprob (np.ndarray, optional): _description_. Defaults to None.
 
         Returns:
             _type_: _description_
         """
-
-        if iprob is None:
-            iprob = np.ones(self.num_states) / self.num_states
-
-        if fprob is None:
-            fprob = np.ones(self.num_states)
-
-        assert len(iprob) == self.num_states
-        assert len(fprob) == self.num_states
 
         num_obs = len(obs)
 
@@ -227,7 +195,7 @@ class SparseHMM:
 
         # backward pass
         log_beta = np.zeros((num_obs, self.num_states))
-        metric = np.log(fprob)
+        metric = np.log(self.fprob)
         for i in range(num_obs - 1, -1, -1):
             log_beta[i, :] = metric
             pathmetric = (
@@ -240,7 +208,7 @@ class SparseHMM:
         # forward pass
         # log_alpha = np.zeros((num_obs, self.num_states))
         log_app = np.zeros((num_obs, self.num_edges))
-        metric = np.log(iprob)
+        metric = np.log(self.iprob)
         for i in range(num_obs):
             pathmetric = (
                 metric[self.from_state]
@@ -257,7 +225,7 @@ class SparseHMM:
             # log_alpha[i, : ] = metric
 
         # entropy can be computed for almost no additional cost:
-        metric += np.log(fprob)
+        metric += np.log(self.fprob)
         log_probability = reducer.reduce(metric)
 
         return log_app, log_probability
