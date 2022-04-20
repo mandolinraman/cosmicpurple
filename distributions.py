@@ -5,6 +5,23 @@
 import numpy as np
 
 
+def handle_nan(log_prob):
+    """_summary_
+
+    Args:
+        log_prob (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    if isinstance(log_prob, np.ndarray):
+        log_prob[log_prob == np.nan] = 0
+    elif np.isnan(log_prob):
+        log_prob = 0.0
+
+    return log_prob
+
+
 class Distribution:
     """_summary_"""
 
@@ -50,7 +67,10 @@ class DiscreteDistribution(Distribution):
         self.pmf /= self.pmf.sum()
         self.num_symbols = len(self.pmf)
 
-        self.log_pmf = np.log(self.pmf)
+        self.log_pmf = np.zeros(
+            self.num_symbols + 1
+        )  # one extra for missing data represented as "-1"
+        self.log_pmf[: self.num_symbols] = np.log(self.pmf)
         self.d = 1
         self.summaries = np.zeros(self.num_symbols)
 
@@ -63,9 +83,13 @@ class DiscreteDistribution(Distribution):
         Returns:
             float: _description_
         """
+        # points can be 0 dimensional (single data point)
+        # or 1 dimensional (batch of points)
         if isinstance(points, np.ndarray):
             return self.log_pmf[points.astype(int)]
         return self.log_pmf[int(points)]
+        # when a point is -1, it's interpereted as missing data
+        # and we return self.log_pmf[-1] = 0
 
     def summarize(self, points: np.ndarray, weights=None):
         """_summary_
@@ -90,7 +114,7 @@ class DiscreteDistribution(Distribution):
 
         new_pmf = self.summaries / self.summaries.sum()
         self.pmf = inertia * self.pmf + (1 - inertia) * new_pmf
-        self.log_pmf = np.log(self.pmf)
+        self.log_pmf[: self.num_symbols] = np.log(self.pmf)
         self.clear_summaries()
 
     def clear_summaries(self):
@@ -155,8 +179,14 @@ class GaussianDistribution(Distribution):
         Returns:
             float: _description_
         """
-
-        return -self.log_const - self.half_inv_var * (points - self.mean) ** 2
+        # points can be 0 dimensional (single data point)
+        # or 1 dimensional (batch of points)
+        log_prob = (
+            -self.log_const - self.half_inv_var * (points - self.mean) ** 2
+        )
+        # if some are nan, then it's treated as missing data
+        # simply return 0
+        return handle_nan(log_prob)
 
     def summarize(self, points: np.ndarray, weights=None):
         """_summary_
@@ -251,11 +281,15 @@ class MultivariateGaussianDistribution(Distribution):
         Returns:
             float: _description_
         """
-
+        # points can be 1 dimensional (single data point)
+        # or 2 dimensional (if we have a batch of points)
         error = points - self.mean
-        return -self.log_const - np.einsum(
-            "ij, jk, kl -> il", error, self.half_inv_cov, error
+        log_prob = -self.log_const - np.einsum(
+            "...i, ij, ...j -> ...", error, self.half_inv_cov, error
         )
+        # if some are nan, then it's treated as missing data
+        # simply return 0
+        return handle_nan(log_prob)
 
     def summarize(self, points: np.ndarray, weights=None):
         """_summary_
@@ -350,8 +384,13 @@ class ARGaussianDistribution(Distribution):
         Returns:
             float: _description_
         """
+        # points can be 1 dimensional (single data point)
+        # or 2 dimensional (if we have a batch of points)
         error = np.dot(points, self.whitener) - self.mean
-        return -self.log_const - self.half_inv_var * error**2
+        log_prob = -self.log_const - self.half_inv_var * error**2
+        # if some are nan, then it's treated as missing data
+        # simply return 0
+        return handle_nan(log_prob)
 
     def summarize(self, points: np.ndarray, weights=None):
         """_summary_
@@ -452,10 +491,15 @@ class MultivariateARGaussianDistribution(Distribution):
         Returns:
             float: _description_
         """
+        # points can be 1 dimensional (single data point)
+        # or 2 dimensional (if we have a batch of points)
         error = np.dot(points, self.whitener) - self.mean
-        return -self.log_const - np.einsum(
-            "ij, jk, kl -> il", error, self.half_inv_cov, error
+        log_prob = -self.log_const - np.einsum(
+            "...i, ij, ...j -> ...", error, self.half_inv_cov, error
         )
+        # if some are nan, then it's treated as missing data
+        # simply return 0
+        return handle_nan(log_prob)
 
     def summarize(self, points: np.ndarray, weights=None):
         """_summary_
