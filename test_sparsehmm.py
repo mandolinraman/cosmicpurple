@@ -1,7 +1,7 @@
-"sparsehmm tests"
+"sparsehmm.py tests"
 import numpy as np
 
-# from pomegranate import *
+import pomegranate as pom
 import distributions as di
 import sparsehmm as sh
 import misc.nanoseek as ns
@@ -28,36 +28,51 @@ rv = np.loadtxt("misc/wksp/rv0.txt")
 pc = np.loadtxt("misc/wksp/pc0.txt")
 edges_hat = np.loadtxt("misc/wksp/edges_hat0.txt", int)[:N]
 
-emitters = [di.GaussianDistribution(mu[t], rv[t]) for t in range(len(adjList))]
+num_edges = len(adjList)
+num_states = 1 + np.max(adjList)
+
+emitters = [di.GaussianDistribution(mu[t], rv[t]) for t in range(num_edges)]
 hmm = sh.SparseHMM(adjList, pc, emitters)
-edges_hat2 = hmm.viterbi(s)
-# edges_hat2_ = ns.hmmViterbi(adjList, s, mu, rv, -np.log(pc))
-err = np.sum(edges_hat != edges_hat2)
-print(f"Viterbi: number of errors = {err}")
 
-h0 = -hmm.log_probability(s) / N / np.log(2)
-# h0_ = ns.hmmEntropy(adjList, s, mu, rv, pc)
-print(f"entropy = {h0}")
+# pomegranate
+pdist = [
+    pom.NormalDistribution(mu[t], np.sqrt(rv[t])) for t in range(num_edges)
+]
+pstates = [pom.State(pdist[t], "state%02d" % t) for t in range(num_edges)]
 
-momentQ, h1 = ns.hmmMoments(adjList, s, mu, rv, pc, s, 2)
+phmm = pom.HiddenMarkovModel()
+phmm.add_states(*pstates)
+for t in range(num_edges):
+    phmm.add_transition(phmm.start, pstates[t], pc[t] / num_states)
+    for u in range(num_edges):
+        if adjList[t, 1] == adjList[u, 0]:
+            phmm.add_transition(pstates[t], pstates[u], pc[u])
 
-logAPP, log_prob = hmm.forward_backward(s)
-h2 = -log_prob / N / np.log(2)
-# logAPP_, h2_ = ns.hmmFBA(adjList, s, mu, rv, pc)
+phmm.bake()
 
-APP = np.exp(logAPP)
-print(f"{err}, {h0}, {h1}, {h2}, {signature(momentQ)}, {signature(APP.T)})")
+for scale in [1.0, np.nan]:
+    edges_hat2 = hmm.viterbi(s * scale)
+    edges_hat3 = np.array(phmm.predict(s, "viterbi")[1:])
+    # edges_hat2_ = ns.hmmViterbi(adjList, s, mu, rv, -np.log(pc))
+    err = np.sum(edges_hat != edges_hat2)
+    print(f"Viterbi: number of errors = {err}")
 
-# edges_hat2 = ns.hmmViterbi(adjList, s * np.nan, mu, rv, -np.log(pc))
-# err = np.linalg.norm(edges_hat - edges_hat2)
-# h0 = ns.hmmEntropy(adjList, s * np.nan, mu, rv, pc)
-# momentQ, h1 = ns.hmmMoments(adjList, s * np.nan, mu, rv, pc, s, 2)
-# logAPP, h2 = ns.hmmFBA(adjList, s * np.nan, mu, rv, pc)
-# APP = np.exp(logAPP)
-# print(
-#     "[%g, %g, %g, %g, %g, %g]"
-#     % (err, h0, h1, h2, signature(momentQ), signature(APP))
-# )
+    h0 = -hmm.log_probability(s * scale) / N / np.log(2)
+    ph0 = -phmm.log_probability(s * scale) / N / np.log(2)
+    # h0_ = ns.hmmEntropy(adjList, s * scale, mu, rv, pc)
+    print(f"entropy = {h0}, {ph0}")
+
+    momentQ, h1 = ns.hmmMoments(adjList, s * scale, mu, rv, pc, s, 2)
+
+    logAPP, log_prob = hmm.forward_backward(s * scale)
+    h2 = -log_prob / N / np.log(2)
+    trans_stats, plogAPP = phmm.forward_backward(s * scale)
+    # logAPP_, h2_ = ns.hmmFBA(adjList, s * scale, mu, rv, pc)
+
+    APP = np.exp(logAPP)
+    print(
+        f"{err}, {h0}, {h1}, {h2}, {signature(momentQ)}, {signature(APP.T)})"
+    )
 
 # ##################
 # # Classifier code

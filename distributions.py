@@ -168,7 +168,7 @@ class GaussianDistribution(Distribution):
 
         # precompute
         self.half_inv_var = 0.5 / self.var
-        self.log_const = 0.5 * np.log(2.0 * np.pi * self.var)
+        self.log_const = 0.5 * np.log(2 * np.pi * self.var)
 
     def log_probability(self, points: float) -> float:
         """_summary_
@@ -217,7 +217,7 @@ class GaussianDistribution(Distribution):
 
         # self.parameters = (self.mean, self.var)
         self.half_inv_var = 0.5 / self.var
-        self.log_const = 0.5 * np.log(2.0 * np.pi * self.var)
+        self.log_const = 0.5 * np.log(2 * np.pi * self.var)
 
         self.clear_summaries()
 
@@ -270,7 +270,9 @@ class MultivariateGaussianDistribution(Distribution):
 
         # precompute
         self.half_inv_cov = 0.5 * np.linalg.inv(self.cov)
-        self.log_const = 0.5 * np.log(2.0 * np.pi * np.linalg.det(self.cov))
+        self.log_const = 0.5 * self.d * np.log(2 * np.pi) + 0.5 * np.log(
+            np.linalg.det(self.cov)
+        )
 
     def log_probability(self, points: np.ndarray) -> float:
         """_summary_
@@ -320,7 +322,9 @@ class MultivariateGaussianDistribution(Distribution):
         self.cov = inertia * self.cov + (1 - inertia) * new_cov
 
         self.half_inv_cov = 0.5 * np.linalg.inv(self.cov)
-        self.log_const = 0.5 * np.log(2.0 * np.pi * np.linalg.det(self.cov))
+        self.log_const = 0.5 * self.d * np.log(2 * np.pi) + 0.5 * np.log(
+            np.linalg.det(self.cov)
+        )
 
         self.clear_summaries()
 
@@ -373,7 +377,7 @@ class ARGaussianDistribution(Distribution):
         self.summaries = np.zeros((self.d + 1, self.d + 1))
 
         self.half_inv_var = 0.5 / var
-        self.log_const = 0.5 * np.log(2.0 * np.pi * var)
+        self.log_const = 0.5 * np.log(2 * np.pi * var)
 
     def log_probability(self, points: np.ndarray) -> float:
         """_summary_
@@ -424,7 +428,7 @@ class ARGaussianDistribution(Distribution):
         self.var = inertia * self.var + (1 - inertia) * new_var
 
         self.half_inv_var = 0.5 / self.var
-        self.log_const = 0.5 * np.log(2.0 * np.pi * self.var)
+        self.log_const = 0.5 * np.log(2 * np.pi * self.var)
 
         self.clear_summaries()
 
@@ -480,7 +484,9 @@ class MultivariateARGaussianDistribution(Distribution):
         self.summaries = np.zeros((self.d + 1, self.d + 1))
 
         self.half_inv_cov = 0.5 * np.linalg.inv(self.cov)
-        self.log_const = 0.5 * np.log(2.0 * np.pi * np.linalg.det(self.cov))
+        self.log_const = 0.5 * self.n_dims * np.log(2 * np.pi) + 0.5 * np.log(
+            np.linalg.det(self.cov)
+        )
 
     def log_probability(self, points: np.ndarray) -> float:
         """_summary_
@@ -538,7 +544,9 @@ class MultivariateARGaussianDistribution(Distribution):
         self.cov = inertia * self.cov + (1 - inertia) * new_cov
 
         self.half_inv_cov = 0.5 * np.linalg.inv(self.cov)
-        self.log_const = 0.5 * np.log(2.0 * np.pi * np.linalg.det(self.cov))
+        self.log_const = 0.5 * self.n_dims * np.log(2 * np.pi) + 0.5 * np.log(
+            np.linalg.det(self.cov)
+        )
 
         self.clear_summaries()
 

@@ -1,5 +1,7 @@
+"utils.py tests"
 import numpy as np
-from utils import *
+from scipy.special import logsumexp
+from utils import Reducer, MultiReducer
 
 
 num = 10000
