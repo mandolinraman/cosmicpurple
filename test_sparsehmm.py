@@ -38,7 +38,7 @@ hmm = sh.SparseHMM(adjList, pc, emitters)
 pdist = [
     pom.NormalDistribution(mu[t], np.sqrt(rv[t])) for t in range(num_edges)
 ]
-pstates = [pom.State(pdist[t], "state%02d" % t) for t in range(num_edges)]
+pstates = [pom.State(pdist[t], f"state{t:02}") for t in range(num_edges)]
 
 phmm = pom.HiddenMarkovModel()
 phmm.add_states(*pstates)
@@ -46,7 +46,9 @@ for t in range(num_edges):
     phmm.add_transition(phmm.start, pstates[t], pc[t] / num_states)
     for u in range(num_edges):
         if adjList[t, 1] == adjList[u, 0]:
-            phmm.add_transition(pstates[t], pstates[u], pc[u])
+            phmm.add_transition(
+                pstates[t], pstates[u], pc[u], group=f"group{u}"
+            )
 
 phmm.bake()
 

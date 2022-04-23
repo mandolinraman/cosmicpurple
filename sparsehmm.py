@@ -92,10 +92,13 @@ class SparseHMM:
 
         # start iterations
         for i in range(num_obs):
-            # compute all accumulated path metrics:
-            pathmetric = metric[self.from_state] + self.log_trans_prob
             self._compute_log_emission_prob(obs[i], log_emission_prob)
-            pathmetric += log_emission_prob[self.emitter_map]
+            # compute all accumulated path metrics:
+            pathmetric = (
+                metric[self.from_state]
+                + self.log_trans_prob
+                + log_emission_prob[self.emitter_map]
+            )
 
             # if we want to sample the APP distribution, we apply
             # softmax to the converging metrics, rather than a max:
@@ -151,10 +154,13 @@ class SparseHMM:
 
         # start iterations
         for i in range(num_obs):
-            # compute all accumulated path metrics:
-            pathmetric = metric[self.from_state] + self.log_trans_prob
             self._compute_log_emission_prob(obs[i], log_emission_prob)
-            pathmetric += log_emission_prob[self.emitter_map]
+            # compute all accumulated forward path metrics:
+            pathmetric = (
+                metric[self.from_state]
+                + self.log_trans_prob
+                + log_emission_prob[self.emitter_map]
+            )
 
             # apply softmax to the converging metrics:
             forward_reducer.reduce(pathmetric, output=metric)
@@ -185,39 +191,47 @@ class SparseHMM:
         for i in range(num_obs):
             self._compute_log_emission_prob(obs[i], log_emission_prob[i])
 
-        # backward pass
-        log_beta = np.zeros((num_obs, self.num_states))
-        metric = np.log(self.fprob)
-        for i in range(num_obs - 1, -1, -1):
-            log_beta[i, :] = metric
-            pathmetric = (
-                metric[self.to_state]
-                + self.log_trans_prob
-                + log_emission_prob[i, self.emitter_map]
-            )
-            backward_reducer.reduce(pathmetric, output=metric)
-
         # forward pass
         # log_alpha = np.zeros((num_obs, self.num_states))
         log_app = np.zeros((num_obs, self.num_edges))
         metric = np.log(self.iprob)
         for i in range(num_obs):
+            # compute all accumulated forward path metrics:
             pathmetric = (
                 metric[self.from_state]
                 + self.log_trans_prob
                 + log_emission_prob[i, self.emitter_map]
             )
 
-            temp = pathmetric + log_beta[i, self.to_state]
-            _ = edge_reducer.reduce(temp, compute_softmax=True)
-            log_app[i, :] = edge_reducer.log_softmax_pmf
+            # cache the forward pathmetrics in log-app:
+            log_app[i] = pathmetric
             forward_reducer.reduce(pathmetric, output=metric)
 
-            # if we wanted to track the alphas too, we'd need this:
-            # log_alpha[i, : ] = metric
+            # uncomment if you want to track the forward coefficients:
+            # log_alpha[i] = metric
 
-        # entropy can be computed for almost no additional cost:
+        # log probability can be computed for almost no additional cost:
         metric += np.log(self.fprob)
         log_probability = state_reducer.reduce(metric)
+
+        # backward pass
+        metric = np.log(self.fprob)
+        for i in range(num_obs - 1, -1, -1):
+            to_state_metric = metric[self.to_state]
+
+            # compute a posteriori probabilies (APP) for edge:
+            edge_reducer.reduce(
+                log_app[i] + to_state_metric, compute_softmax=True
+            )
+            # overwrite log_app[i] with final APP for edge:
+            log_app[i] = edge_reducer.log_softmax_pmf
+
+            # compute all accumulated backward path metrics:
+            pathmetric = (
+                to_state_metric
+                + self.log_trans_prob
+                + log_emission_prob[i, self.emitter_map]
+            )
+            backward_reducer.reduce(pathmetric, output=metric)
 
         return log_app, log_probability
