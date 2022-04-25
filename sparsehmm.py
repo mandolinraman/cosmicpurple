@@ -235,3 +235,80 @@ class SparseHMM:
             backward_reducer.reduce(pathmetric, output=metric)
 
         return log_app, log_probability
+
+    def compute_expectation(
+        self, obs: np.ndarray, get_tensor=None, small_probability=0.0
+    ):
+        """_summary_
+
+        Args:
+            obs (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+
+        num_obs = len(obs)
+
+        # max/softmax reducers:
+        forward_reducer = MultiReducer(self.num_states, self.to_state)
+        state_reducer = Reducer(self.num_states)
+
+        # allocate space
+        metric = np.log(self.iprob)
+        log_emission_prob = np.zeros(self.num_emitters)
+
+        # start iterations
+        for i in range(num_obs):
+            self._compute_log_emission_prob(obs[i], log_emission_prob)
+            # compute all accumulated forward path metrics:
+            pathmetric = (
+                metric[self.from_state]
+                + self.log_trans_prob
+                + log_emission_prob[self.emitter_map]
+            )
+
+            if get_tensor is None:
+                # apply softmax to the converging metrics:
+                forward_reducer.reduce(pathmetric, output=metric)
+            else:
+                # apply softmax to the converging metrics:
+                forward_reducer.reduce(
+                    pathmetric, output=metric, compute_softmax=True
+                )
+                pmf = forward_reducer.softmax_pmf
+
+                # Get a list of tensors that need to be averaged w.r.t.
+                # the posterior probability. The 1st dimension of each
+                # tensor is the edge index:
+                #   tensors[i][e, ...] = the i-th tensor on edge e
+
+                tensors = get_tensor(i, obs[i], pmf)
+                if i == 0:
+                    # first time setup:
+                    expectation = [
+                        np.zeros((self.num_states,) + tensor.shape[1:])
+                        for tensor in tensors
+                    ]
+                    new_expectation = [
+                        np.zero((self.num_states,) + tensor.shape[1:])
+                        for tensor in tensors
+                    ]
+                else:
+                    for tensor in new_expectation:
+                        tensor.fill(0)
+
+                for exp, new_exp, tensor in zip(
+                    expectation, new_expectation, tensors
+                ):
+                    for edge, prob in enumerate(pmf):
+                        if prob > small_probability:
+                            new_exp[self.to_state[edge]] += prob * (
+                                exp[self.from_state[edge]] + tensor[edge]
+                            )
+
+                # swap the two
+                expectation, new_expectation = new_expectation, expectation
+
+        metric += np.log(self.fprob)
+        return state_reducer.reduce(metric)
