@@ -20,7 +20,7 @@ def signature(vec):
 
 
 # load data
-N = 100000
+N = 1000
 adjList = np.loadtxt("misc/wksp/adjList0.txt", int)
 s = np.loadtxt("misc/wksp/S0.txt")[:N]
 mu = np.loadtxt("misc/wksp/mu0.txt")

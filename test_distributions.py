@@ -4,8 +4,8 @@ import pomegranate as pom
 import distributions as di
 
 
-def check_equal(a, b):
-    if np.allclose(a, b):
+def check_equal(first, second):
+    if np.allclose(first, second):
         print("Passed!")
     else:
         print("Failed.")

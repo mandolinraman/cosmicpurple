@@ -49,7 +49,7 @@ class SparseHMM:
 
         self.num_emitters = len(emitters)
         assert set(emitter_map) == set(range(self.num_emitters))
-        self.emitter_map = emitter_map
+        self.edge_to_emitter = emitter_map
 
         # validate iprob, fprob
         if iprob is None:
@@ -63,6 +63,9 @@ class SparseHMM:
 
         self.iprob = iprob
         self.fprob = fprob
+
+        # summaries for computing edge transition probabilities
+        self.summaries = np.zeros(self.num_edges)
 
     def _compute_log_emission_prob(self, obs, log_emission_prob):
         # compute all emission probabilities
@@ -97,7 +100,7 @@ class SparseHMM:
             pathmetric = (
                 metric[self.from_state]
                 + self.log_trans_prob
-                + log_emission_prob[self.emitter_map]
+                + log_emission_prob[self.edge_to_emitter]
             )
 
             # if we want to sample the APP distribution, we apply
@@ -159,7 +162,7 @@ class SparseHMM:
             pathmetric = (
                 metric[self.from_state]
                 + self.log_trans_prob
-                + log_emission_prob[self.emitter_map]
+                + log_emission_prob[self.edge_to_emitter]
             )
 
             # apply softmax to the converging metrics:
@@ -200,7 +203,7 @@ class SparseHMM:
             pathmetric = (
                 metric[self.from_state]
                 + self.log_trans_prob
-                + log_emission_prob[i, self.emitter_map]
+                + log_emission_prob[i, self.edge_to_emitter]
             )
 
             # cache the forward pathmetrics in log-app:
@@ -230,13 +233,129 @@ class SparseHMM:
             pathmetric = (
                 to_state_metric
                 + self.log_trans_prob
-                + log_emission_prob[i, self.emitter_map]
+                + log_emission_prob[i, self.edge_to_emitter]
             )
             backward_reducer.reduce(pathmetric, output=metric)
 
         return log_app, log_probability
 
+    def summarize(self, obs: np.ndarray, algorithm, temperature=0.0):
+        """_summary_
+
+        Args:
+            obs (np.ndarray): _description_
+        """
+
+        if algorithm == "forward_backward":
+            self._forward_backward_summarize(obs)
+        elif algorithm == "forward_summarize":
+            self._forward_summarize(obs)
+        elif algorithm == "viterbi":
+            pass
+
+    def _forward_backward_summarize(self, obs: np.ndarray):
+        """_summary_
+
+        Args:
+            obs (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+
+        log_app, _ = self.forward_backward(obs)
+        app = np.exp(log_app)
+        # log_edge_count = logsumexp(log_app, axis=0, compute_softmax=True)
+        edge_count = app.sum(axis=0)
+
+        # summarize for transition model
+        self.summaries[0] += edge_count
+
+        # let each emitter summarize
+        for edge, emitter_index in enumerate(self.edge_to_emitter):
+            self.emitters[emitter_index].summarize(obs, app[:, edge])
+
+    def _forward_summarize(self, obs: np.ndarray):
+        """_summary_
+
+        Args:
+            obs (np.ndarray): _description_
+        """
+
+    def from_summaries(self, inertia=0.0):
+        """_summary_
+
+        Args:
+            inertia (float, optional): _description_. Defaults to 0.0.
+        """
+
+        # TODO: estimate transition model
+
+        self.clear_summaries()
+
+        # compute new model from summaries for each *unique* emitter
+        # and then clear its summary
+        for emitter in self.emitters:
+            emitter.from_summaries(inertia)
+            emitter.clear_summaries()
+
+    def clear_summaries(self):
+        """_summary_"""
+        self.summaries.fill(0)
+
     def compute_expectation(
+        self, obs: np.ndarray, get_tensor, algorithm, small_probability=0.0
+    ):
+        """_summary_
+
+        Args:
+            obs (np.ndarray): _description_
+            get_tensor (_type_, optional): _description_. Defaults to None.
+            small_probability (float, optional): _description_. Defaults to 0.0.
+        """
+        if algorithm == "forward":
+            return self._forward_expectation(
+                obs, get_tensor, small_probability
+            )
+
+        if algorithm == "forward_backward":
+            pass
+        else:
+            raise ValueError("Invalid algorithm")
+
+    def _forward_backward_expectation(
+        self, obs: np.ndarray, get_tensor=None, small_probability=0.0
+    ):
+        """_summary_
+
+        Args:
+            obs (np.ndarray): _description_
+            get_tensor (_type_, optional): _description_. Defaults to None.
+            small_probability (float, optional): _description_. Defaults to 0.0.
+        """
+        num_obs = len(obs)
+
+        log_app, _ = self.forward_backward(obs)
+        app = np.exp(log_app)
+
+        for i in range(num_obs):
+            tensors = get_tensor(i, obs[i])
+            if i == 0:
+                # first time setup:
+                expectation = [
+                    np.zeros(tensor.shape[1:]) for tensor in tensors
+                ]
+
+            for exp, tensor in zip(expectation, tensors):
+                for edge, prob in enumerate(app[i]):
+                    if prob > small_probability:
+                        exp += prob * tensor[edge]
+                # it's same as this:
+                # exp += np.einsum("e, e... -> ...", app[i], tensor)
+
+        return expectation
+
+    def _forward_expectation(
         self, obs: np.ndarray, get_tensor=None, small_probability=0.0
     ):
         """_summary_
@@ -265,50 +384,46 @@ class SparseHMM:
             pathmetric = (
                 metric[self.from_state]
                 + self.log_trans_prob
-                + log_emission_prob[self.emitter_map]
+                + log_emission_prob[self.edge_to_emitter]
             )
 
-            if get_tensor is None:
-                # apply softmax to the converging metrics:
-                forward_reducer.reduce(pathmetric, output=metric)
+            # apply softmax to the converging metrics:
+            forward_reducer.reduce(
+                pathmetric, output=metric, compute_softmax=True
+            )
+            pmf = forward_reducer.softmax_pmf
+
+            # Get a list of tensors that need to be averaged w.r.t.
+            # the posterior probability. The 1st dimension of each
+            # tensor is the edge index:
+            #   tensors[i][e, ...] = the i-th tensor on edge e
+
+            tensors = get_tensor(i, obs[i])
+            if i == 0:
+                # first time setup:
+                expectation = [
+                    np.zeros((self.num_states,) + tensor.shape[1:])
+                    for tensor in tensors
+                ]
+                new_expectation = [
+                    np.zero((self.num_states,) + tensor.shape[1:])
+                    for tensor in tensors
+                ]
             else:
-                # apply softmax to the converging metrics:
-                forward_reducer.reduce(
-                    pathmetric, output=metric, compute_softmax=True
-                )
-                pmf = forward_reducer.softmax_pmf
+                for tensor in new_expectation:
+                    tensor.fill(0)
 
-                # Get a list of tensors that need to be averaged w.r.t.
-                # the posterior probability. The 1st dimension of each
-                # tensor is the edge index:
-                #   tensors[i][e, ...] = the i-th tensor on edge e
+            for exp, new_exp, tensor in zip(
+                expectation, new_expectation, tensors
+            ):
+                for edge, prob in enumerate(pmf):
+                    if prob > small_probability:
+                        new_exp[self.to_state[edge]] += prob * (
+                            exp[self.from_state[edge]] + tensor[edge]
+                        )
 
-                tensors = get_tensor(i, obs[i], pmf)
-                if i == 0:
-                    # first time setup:
-                    expectation = [
-                        np.zeros((self.num_states,) + tensor.shape[1:])
-                        for tensor in tensors
-                    ]
-                    new_expectation = [
-                        np.zero((self.num_states,) + tensor.shape[1:])
-                        for tensor in tensors
-                    ]
-                else:
-                    for tensor in new_expectation:
-                        tensor.fill(0)
-
-                for exp, new_exp, tensor in zip(
-                    expectation, new_expectation, tensors
-                ):
-                    for edge, prob in enumerate(pmf):
-                        if prob > small_probability:
-                            new_exp[self.to_state[edge]] += prob * (
-                                exp[self.from_state[edge]] + tensor[edge]
-                            )
-
-                # swap the two
-                expectation, new_expectation = new_expectation, expectation
+            # swap the two
+            expectation, new_expectation = new_expectation, expectation
 
         metric += np.log(self.fprob)
         return state_reducer.reduce(metric)

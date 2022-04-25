@@ -31,15 +31,7 @@ class BaseReducer:
         """
         return np.exp(self.log_softmax_pmf)
 
-    def hard_reduce(self, metrics, **kwargs):
-        """_summary_"""
-        raise NotImplementedError
-
-    def soft_reduce(self, metrics, **kwargs):
-        """_summary_"""
-        raise NotImplementedError
-
-    def reduce(self, metrics, **kwargs):
+    def reduce(self, metrics):
         """_summary_
 
         Args:
@@ -48,9 +40,8 @@ class BaseReducer:
         Returns:
             _type_: _description_
         """
-        if self.temperature == 0:
-            return self.hard_reduce(metrics, **kwargs)
-        return self.soft_reduce(metrics, **kwargs)
+
+        raise NotImplementedError
 
 
 # Reducer for single destination
@@ -67,7 +58,7 @@ class Reducer(BaseReducer):
         self.winner = -1
         self.output = np.nan
 
-    def hard_reduce(self, metrics: np.ndarray, **kwargs) -> float:
+    def _hard_reduce(self, metrics: np.ndarray) -> float:
         """_summary_
 
         Args:
@@ -76,14 +67,13 @@ class Reducer(BaseReducer):
         Returns:
             _type_: _description_
         """
-
-        assert len(metrics) == self.num
-
         self.winner = np.argmax(metrics)
         self.output = metrics[self.winner]
         return self.output, self.winner
 
-    def soft_reduce(self, metrics: np.ndarray, **kwargs) -> float:
+    def _soft_reduce(
+        self, metrics: np.ndarray, compute_softmax=False
+    ) -> float:
         """_summary_
 
         Args:
@@ -93,16 +83,13 @@ class Reducer(BaseReducer):
         Returns:
             _type_: _description_
         """
-
-        assert len(metrics) == self.num
-
         if self.temperature != 1:
             scaled_metrics = metrics / self.temperature
         else:
             scaled_metrics = metrics
 
         self.output = logsumexp(scaled_metrics)  # softmax(metrics)
-        if kwargs.get("compute_softmax", False):
+        if compute_softmax:
             # first deal with corner cases:
             if self.output == np.inf:
                 temp = scaled_metrics == np.inf
@@ -119,6 +106,20 @@ class Reducer(BaseReducer):
             self.output *= self.temperature
 
         return self.output
+
+    def reduce(self, metrics: np.ndarray, compute_softmax=False):
+        """_summary_
+
+        Args:
+            metrics (np.ndarray): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        assert len(metrics) == self.num
+        if self.temperature == 0:
+            return self._hard_reduce(metrics)
+        return self._soft_reduce(metrics, compute_softmax)
 
     def sample_softmax(self):
         """_summary_
@@ -161,25 +162,24 @@ class MultiReducer(BaseReducer):
         self.output = np.full(num_buckets, np.nan)  # fall back for output
         self.winners = np.full(num_buckets, -1, int)  # fallback for winners
 
-    def hard_reduce(self, metrics: np.ndarray, **kwargs):
+    def hard_reduce(
+        self, metrics: np.ndarray, output: np.ndarray, winners: np.ndarray
+    ):
         """_summary_
 
         Args:
             metrics (_type_): _description_
             reduced (_type_): _description_
         """
-        output = kwargs.get("output", self.output)
-        winners = kwargs.get("winners", self.winners)
-        assert len(metrics) == self.num
-        assert len(output) == self.num_buckets
-
         output.fill(-np.inf)
         for index, (metric, bucket) in enumerate(zip(metrics, self.buckets)):
             if metric > output[bucket]:
                 output[bucket] = metric
                 winners[bucket] = index
 
-    def soft_reduce(self, metrics: np.ndarray, **kwargs):
+    def soft_reduce(
+        self, metrics: np.ndarray, output: np.ndarray, compute_softmax
+    ):
         """_summary_
 
         Args:
@@ -187,10 +187,6 @@ class MultiReducer(BaseReducer):
             reduced (_type_): _description_
             compute_softmax (bool, optional): _description_. Defaults to False.
         """
-        output = kwargs.get("output", self.output)
-        assert len(metrics) == self.num
-        assert len(output) == self.num_buckets
-
         if self.temperature != 1:
             scaled_metrics = metrics / self.temperature
         else:
@@ -214,7 +210,7 @@ class MultiReducer(BaseReducer):
         log_gamma = np.log(gamma)
         output += log_gamma  # softMax operation
 
-        if kwargs.get("compute_softmax", False):
+        if compute_softmax:
             for index, (metric, bucket) in enumerate(
                 zip(scaled_metrics, self.buckets)
             ):
@@ -227,7 +223,34 @@ class MultiReducer(BaseReducer):
         if self.temperature != 1:
             output *= self.temperature
 
-    def sample_softmax(self, **kwargs):
+    def reduce(
+        self,
+        metrics: np.ndarray,
+        output=None,
+        winners=None,
+        compute_softmax=False,
+    ):
+        """_summary_
+
+        Args:
+            metrics (np.ndarray): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        assert len(metrics) == self.num
+        if output is None:
+            output = self.output
+        assert len(output) == self.num_buckets
+
+        if self.temperature == 0:
+            if winners is None:
+                winners = self.winners
+            self.hard_reduce(metrics, output, winners)
+        else:
+            self.soft_reduce(metrics, output, compute_softmax)
+
+    def sample_softmax(self, winners=None):
         """_summary_
 
         Args:
@@ -236,7 +259,8 @@ class MultiReducer(BaseReducer):
         Returns:
             _type_: _description_
         """
-        winners = kwargs.get("winners", self.winners)
+        if winners is None:
+            winners = self.winners
         assert len(winners) == self.num_buckets
 
         winners.fill(-1)
