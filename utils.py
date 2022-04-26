@@ -4,12 +4,35 @@ in a numerically stable way.
 
 import numpy as np
 
-# from numba import njit
+from numba import njit
 from scipy.special import logsumexp
 
 
-# @njit
-def aggregate(values, num_buckets, buckets, weights=None):
+@njit
+def aggregate_simple(values, weights=None, small_weight=0.0):
+    """_summary_
+
+    Args:
+        values (_type_): _description_
+        num_buckets (_type_): _description_
+        buckets (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    result = np.zeros(values.shape[1:])
+    if weights is None:
+        for value in values:
+            result += value
+    else:
+        for value, weight in zip(values, weights):
+            if np.abs(weight) > small_weight:
+                result += weight * value
+    return result
+
+
+@njit
+def aggregate(values, num_buckets, buckets, weights=None, small_weight=0.0):
     """_summary_
 
     Args:
@@ -26,9 +49,30 @@ def aggregate(values, num_buckets, buckets, weights=None):
             result[bucket] += value
     else:
         for value, bucket, weight in zip(values, buckets, weights):
-            result[bucket] += weight * value
+            if np.abs(weight) > small_weight:
+                result[bucket] += weight * value
 
     return result
+
+
+@njit
+def aggregate_max(
+    metrics: np.ndarray,
+    buckets: np.ndarray,
+    output: np.ndarray,
+    winners: np.ndarray,
+):
+    """_summary_
+
+    Args:
+        metrics (_type_): _description_
+        reduced (_type_): _description_
+    """
+    output.fill(-np.inf)
+    for index, (metric, bucket) in enumerate(zip(metrics, buckets)):
+        if metric > output[bucket]:
+            output[bucket] = metric
+            winners[bucket] = index
 
 
 class BaseReducer:

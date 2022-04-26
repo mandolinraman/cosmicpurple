@@ -1,7 +1,7 @@
 "utils.py tests"
 import numpy as np
 from scipy.special import logsumexp
-from utils import Reducer, MultiReducer
+from utils import Reducer, MultiReducer, aggregate
 
 
 num = 10000
@@ -12,6 +12,10 @@ buckets = np.random.permutation(
 # buckets = np.random.randint(0, num_buckets, num)
 
 metrics = np.random.rand(num)
+
+# aggregate function
+result = aggregate(metrics, num_buckets, buckets)
+
 
 # single reducer
 red0 = Reducer(num, temperature=0)

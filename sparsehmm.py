@@ -281,6 +281,7 @@ class SparseHMM:
         Args:
             obs (np.ndarray): _description_
         """
+        raise NotImplementedError
 
     def _viterbi_summarize(self, obs: np.ndarray, temperature: float = 0.0):
         """_summary_
@@ -288,6 +289,7 @@ class SparseHMM:
         Args:
             obs (np.ndarray): _description_
         """
+        raise NotImplementedError
 
     def from_summaries(self, inertia=0.0):
         """_summary_
@@ -330,9 +332,7 @@ class SparseHMM:
             small_probability (float, optional): _description_. Defaults to 0.0.
         """
         if algorithm == "forward_backward":
-            return self._forward_backward_expectation(
-                obs, get_tensor, small_probability
-            )
+            return self._forward_backward_expectation(obs, get_tensor)
 
         if algorithm == "forward":
             return self._forward_expectation(
@@ -341,9 +341,7 @@ class SparseHMM:
 
         raise ValueError("Invalid algorithm")
 
-    def _forward_backward_expectation(
-        self, obs: np.ndarray, get_tensor=None, small_probability=0.0
-    ):
+    def _forward_backward_expectation(self, obs: np.ndarray, get_tensor=None):
         """_summary_
 
         Args:
@@ -357,18 +355,17 @@ class SparseHMM:
         app = np.exp(log_app)
 
         for i in range(num_obs):
+            # Get a list of tensors that need to be averaged w.r.t.
+            # the posterior probability. The 1st dimension of each
+            # tensor is the edge index:
+            #   tensors[i][e, ...] = the i-th tensor on edge e
             tensors = get_tensor(i, obs[i])
             if i == 0:
                 # first time setup:
                 results = [np.zeros(tensor.shape[1:]) for tensor in tensors]
 
-            if small_probability == 0.0:
-                for result, tensor in zip(results, tensors):
-                    result += np.einsum("e, e... -> ...", app[i], tensor)
-            else:
-                for edge, prob in enumerate(app[i]):
-                    if prob > small_probability:
-                        result += prob * tensor[edge]
+            for result, tensor in zip(results, tensors):
+                result += np.einsum("e, e... -> ...", app[i], tensor)
 
         return results
 
@@ -383,7 +380,6 @@ class SparseHMM:
         Returns:
             _type_: _description_
         """
-
         num_obs = len(obs)
 
         # max/softmax reducers:
@@ -414,7 +410,6 @@ class SparseHMM:
             # the posterior probability. The 1st dimension of each
             # tensor is the edge index:
             #   tensors[i][e, ...] = the i-th tensor on edge e
-
             tensors = get_tensor(i, obs[i])
             if i == 0:
                 # first time setup:
@@ -433,11 +428,18 @@ class SparseHMM:
             for result, new_result, tensor in zip(
                 results, new_results, tensors
             ):
-                for edge, prob in enumerate(pmf):
-                    if prob > small_probability:
-                        new_result[self.to_state[edge]] += prob * (
-                            result[self.from_state[edge]] + tensor[edge]
-                        )
+                new_result += aggregate(
+                    result[self.from_state] + tensor,
+                    self.num_states,
+                    self.to_state,
+                    weights=pmf,
+                    small_weight=small_probability,
+                )
+                # for edge, prob in enumerate(pmf):
+                #     if prob > small_probability:
+                #         new_result[self.to_state[edge]] += prob * (
+                #             result[self.from_state[edge]] + tensor[edge]
+                #         )
 
             # swap the two
             results, new_results = new_results, results
@@ -445,16 +447,8 @@ class SparseHMM:
         metric += np.log(self.fprob)
         _ = state_reducer.reduce(metric, compute_softmax=True)
         pmf = state_reducer.softmax_pmf
-
-        if small_probability == 0.0:
-            new_results = [
-                np.einsum("s, s... -> ...", pmf, result) for result in results
-            ]
-        else:
-            new_results = [np.zeros(result.shape[1:]) for result in results]
-            for result, new_result in zip(results, new_results):
-                for state, prob in enumerate(pmf):
-                    if prob > small_probability:
-                        new_result += prob * result[state]
+        new_results = [
+            np.einsum("s, s... -> ...", pmf, result) for result in results
+        ]
 
         return new_results

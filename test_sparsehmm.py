@@ -52,36 +52,36 @@ for t in range(num_edges):
 
 phmm.bake()
 
-for scale in [1.0]:  # , np.nan]:
-    edges_hat2 = hmm.viterbi(s * scale)
-    edges_hat3 = np.array(phmm.predict(s, "viterbi")[1:])
-    # edges_hat2_ = ns.hmmViterbi(adjList, s, mu, rv, -np.log(pc))
-    err = np.sum(edges_hat != edges_hat2)
-    print(f"Viterbi: number of errors = {err}")
+scale = 1.0
 
-    h0 = -hmm.log_probability(s * scale) / N / np.log(2)
-    ph0 = -phmm.log_probability(s * scale) / N / np.log(2)
-    # h0_ = ns.hmmEntropy(adjList, s * scale, mu, rv, pc)
-    print(f"entropy = {h0}, {ph0}")
+# viterbi
+edges_hat_my = hmm.viterbi(s * scale)
+edges_hat_pom = np.array(phmm.predict(s, "viterbi")[1:])
+edges_hat_ns = ns.hmmViterbi(adjList, s, mu, rv, -np.log(pc))
 
-    momentQ, h1 = ns.hmmMoments(adjList, s * scale, mu, rv, pc, s, 2)
+err = np.sum(edges_hat != edges_hat_my)
+print(f"Viterbi: number of errors = {err}")
 
-    logAPP, log_prob = hmm.forward_backward(s * scale)
-    h2 = -log_prob / N / np.log(2)
-    trans_stats, plogAPP = phmm.forward_backward(s * scale)
-    # logAPP_, h2_ = ns.hmmFBA(adjList, s * scale, mu, rv, pc)
+h0_my = -hmm.log_probability(s * scale) / N / np.log(2)
+h0_pom = -phmm.log_probability(s * scale) / N / np.log(2)
+h0_ns = ns.hmmEntropy(adjList, s * scale, mu, rv, pc)
+print(f"Entropy = {h0_my}, {h0_pom}, {h0_ns}")
 
-    APP = np.exp(logAPP)
-    print(
-        f"{err}, {h0}, {h1}, {h2}, {signature(momentQ)}, {signature(APP.T)})"
-    )
+logAPP_my, log_prob = hmm.forward_backward(s * scale)
+trans_stats, logAPP_pom = phmm.forward_backward(s * scale)
+logAPP_ns, h2_ns = ns.hmmFBA(adjList, s * scale, mu, rv, pc)
 
-    get_tensor = lambda i, obs: [
-        np.eye(num_edges)[..., np.newaxis] * np.array([1, obs, obs**2])
-    ]
+APP = np.exp(logAPP_my)
 
-    result = hmm.compute_expectation(s * scale, get_tensor, "forward_backward")
-    result2 = hmm.compute_expectation(s * scale, get_tensor, "forward")
+get_tensor = lambda i, obs: [
+    np.eye(num_edges)[..., np.newaxis] * np.array([1, obs, obs**2])
+]
+
+momentQ_my1 = hmm.compute_expectation(
+    s * scale, get_tensor, "forward_backward"
+)[0]
+momentQ_my2 = hmm.compute_expectation(s * scale, get_tensor, "forward")[0]
+momentQ_ns, _ = ns.hmmMoments(adjList, s * scale, mu, rv, pc, s, 2)
 
 
 # ##################
