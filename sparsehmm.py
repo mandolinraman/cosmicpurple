@@ -3,7 +3,7 @@
 
 
 import numpy as np
-from utils import Reducer, MultiReducer
+from utils import Reducer, MultiReducer, aggregate
 
 
 class SparseHMM:
@@ -72,7 +72,7 @@ class SparseHMM:
         for j, emitter in enumerate(self.emitters):
             log_emission_prob[j] = emitter.log_probability(obs)
 
-    def viterbi(self, obs: np.ndarray, temperature: float = 0):
+    def viterbi(self, obs: np.ndarray, temperature: float = 0.0):
         """_summary_
 
         Args:
@@ -248,10 +248,10 @@ class SparseHMM:
 
         if algorithm == "forward_backward":
             self._forward_backward_summarize(obs)
-        elif algorithm == "forward_summarize":
+        elif algorithm == "forward":
             self._forward_summarize(obs)
         elif algorithm == "viterbi":
-            pass
+            self._viterbi_summarize(obs, temperature=temperature)
 
     def _forward_backward_summarize(self, obs: np.ndarray):
         """_summary_
@@ -264,18 +264,25 @@ class SparseHMM:
         """
 
         log_app, _ = self.forward_backward(obs)
-        app = np.exp(log_app)
         # log_edge_count = logsumexp(log_app, axis=0, compute_softmax=True)
+        app = np.exp(log_app)
         edge_count = app.sum(axis=0)
 
         # summarize for transition model
-        self.summaries[0] += edge_count
+        self.summaries += edge_count
 
         # let each emitter summarize
         for edge, emitter_index in enumerate(self.edge_to_emitter):
-            self.emitters[emitter_index].summarize(obs, app[:, edge])
+            self.emitters[emitter_index].summarize(obs, weights=app[:, edge])
 
     def _forward_summarize(self, obs: np.ndarray):
+        """_summary_
+
+        Args:
+            obs (np.ndarray): _description_
+        """
+
+    def _viterbi_summarize(self, obs: np.ndarray, temperature: float = 0.0):
         """_summary_
 
         Args:
@@ -288,20 +295,29 @@ class SparseHMM:
         Args:
             inertia (float, optional): _description_. Defaults to 0.0.
         """
-
-        # TODO: estimate transition model
-
-        self.clear_summaries()
+        # compute new transition probabilities
+        state_counts = aggregate(
+            self.summaries, self.num_states, self.from_state
+        )
+        new_trans_prob = self.summaries / state_counts[self.from_state]
+        self.log_trans_prob = np.log(
+            inertia * np.exp(self.log_trans_prob)
+            + (1 - inertia) * new_trans_prob
+        )
 
         # compute new model from summaries for each *unique* emitter
-        # and then clear its summary
         for emitter in self.emitters:
             emitter.from_summaries(inertia)
-            emitter.clear_summaries()
+
+        # clear all summaries
+        self.clear_summaries()
 
     def clear_summaries(self):
         """_summary_"""
         self.summaries.fill(0)
+        # clear summary of each unique emitter
+        for emitter in self.emitters:
+            emitter.clear_summaries()
 
     def compute_expectation(
         self, obs: np.ndarray, get_tensor, algorithm, small_probability=0.0
@@ -313,15 +329,17 @@ class SparseHMM:
             get_tensor (_type_, optional): _description_. Defaults to None.
             small_probability (float, optional): _description_. Defaults to 0.0.
         """
+        if algorithm == "forward_backward":
+            return self._forward_backward_expectation(
+                obs, get_tensor, small_probability
+            )
+
         if algorithm == "forward":
             return self._forward_expectation(
                 obs, get_tensor, small_probability
             )
 
-        if algorithm == "forward_backward":
-            pass
-        else:
-            raise ValueError("Invalid algorithm")
+        raise ValueError("Invalid algorithm")
 
     def _forward_backward_expectation(
         self, obs: np.ndarray, get_tensor=None, small_probability=0.0
@@ -342,18 +360,17 @@ class SparseHMM:
             tensors = get_tensor(i, obs[i])
             if i == 0:
                 # first time setup:
-                expectation = [
-                    np.zeros(tensor.shape[1:]) for tensor in tensors
-                ]
+                results = [np.zeros(tensor.shape[1:]) for tensor in tensors]
 
-            for exp, tensor in zip(expectation, tensors):
+            if small_probability == 0.0:
+                for result, tensor in zip(results, tensors):
+                    result += np.einsum("e, e... -> ...", app[i], tensor)
+            else:
                 for edge, prob in enumerate(app[i]):
                     if prob > small_probability:
-                        exp += prob * tensor[edge]
-                # it's same as this:
-                # exp += np.einsum("e, e... -> ...", app[i], tensor)
+                        result += prob * tensor[edge]
 
-        return expectation
+        return results
 
     def _forward_expectation(
         self, obs: np.ndarray, get_tensor=None, small_probability=0.0
@@ -401,29 +418,43 @@ class SparseHMM:
             tensors = get_tensor(i, obs[i])
             if i == 0:
                 # first time setup:
-                expectation = [
+                results = [
                     np.zeros((self.num_states,) + tensor.shape[1:])
                     for tensor in tensors
                 ]
-                new_expectation = [
-                    np.zero((self.num_states,) + tensor.shape[1:])
+                new_results = [
+                    np.zeros((self.num_states,) + tensor.shape[1:])
                     for tensor in tensors
                 ]
             else:
-                for tensor in new_expectation:
+                for tensor in new_results:
                     tensor.fill(0)
 
-            for exp, new_exp, tensor in zip(
-                expectation, new_expectation, tensors
+            for result, new_result, tensor in zip(
+                results, new_results, tensors
             ):
                 for edge, prob in enumerate(pmf):
                     if prob > small_probability:
-                        new_exp[self.to_state[edge]] += prob * (
-                            exp[self.from_state[edge]] + tensor[edge]
+                        new_result[self.to_state[edge]] += prob * (
+                            result[self.from_state[edge]] + tensor[edge]
                         )
 
             # swap the two
-            expectation, new_expectation = new_expectation, expectation
+            results, new_results = new_results, results
 
         metric += np.log(self.fprob)
-        return state_reducer.reduce(metric)
+        _ = state_reducer.reduce(metric, compute_softmax=True)
+        pmf = state_reducer.softmax_pmf
+
+        if small_probability == 0.0:
+            new_results = [
+                np.einsum("s, s... -> ...", pmf, result) for result in results
+            ]
+        else:
+            new_results = [np.zeros(result.shape[1:]) for result in results]
+            for result, new_result in zip(results, new_results):
+                for state, prob in enumerate(pmf):
+                    if prob > small_probability:
+                        new_result += prob * result[state]
+
+        return new_results

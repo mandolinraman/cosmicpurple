@@ -52,7 +52,7 @@ for t in range(num_edges):
 
 phmm.bake()
 
-for scale in [1.0, np.nan]:
+for scale in [1.0]:  # , np.nan]:
     edges_hat2 = hmm.viterbi(s * scale)
     edges_hat3 = np.array(phmm.predict(s, "viterbi")[1:])
     # edges_hat2_ = ns.hmmViterbi(adjList, s, mu, rv, -np.log(pc))
@@ -75,6 +75,14 @@ for scale in [1.0, np.nan]:
     print(
         f"{err}, {h0}, {h1}, {h2}, {signature(momentQ)}, {signature(APP.T)})"
     )
+
+    get_tensor = lambda i, obs: [
+        np.eye(num_edges)[..., np.newaxis] * np.array([1, obs, obs**2])
+    ]
+
+    result = hmm.compute_expectation(s * scale, get_tensor, "forward_backward")
+    result2 = hmm.compute_expectation(s * scale, get_tensor, "forward")
+
 
 # ##################
 # # Classifier code

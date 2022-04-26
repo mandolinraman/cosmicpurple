@@ -3,7 +3,32 @@ in a numerically stable way.
 """
 
 import numpy as np
+
+# from numba import njit
 from scipy.special import logsumexp
+
+
+# @njit
+def aggregate(values, num_buckets, buckets, weights=None):
+    """_summary_
+
+    Args:
+        values (_type_): _description_
+        num_buckets (_type_): _description_
+        buckets (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    result = np.zeros((num_buckets,) + values.shape[1:])
+    if weights is None:
+        for value, bucket in zip(values, buckets):
+            result[bucket] += value
+    else:
+        for value, bucket, weight in zip(values, buckets, weights):
+            result[bucket] += weight * value
+
+    return result
 
 
 class BaseReducer:
@@ -58,6 +83,20 @@ class Reducer(BaseReducer):
         self.winner = -1
         self.output = np.nan
 
+    def reduce(self, metrics: np.ndarray, compute_softmax=False):
+        """_summary_
+
+        Args:
+            metrics (np.ndarray): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        assert len(metrics) == self.num
+        if self.temperature == 0:
+            return self._hard_reduce(metrics)
+        return self._soft_reduce(metrics, compute_softmax)
+
     def _hard_reduce(self, metrics: np.ndarray) -> float:
         """_summary_
 
@@ -107,20 +146,6 @@ class Reducer(BaseReducer):
 
         return self.output
 
-    def reduce(self, metrics: np.ndarray, compute_softmax=False):
-        """_summary_
-
-        Args:
-            metrics (np.ndarray): _description_
-
-        Returns:
-            _type_: _description_
-        """
-        assert len(metrics) == self.num
-        if self.temperature == 0:
-            return self._hard_reduce(metrics)
-        return self._soft_reduce(metrics, compute_softmax)
-
     def sample_softmax(self):
         """_summary_
 
@@ -162,7 +187,34 @@ class MultiReducer(BaseReducer):
         self.output = np.full(num_buckets, np.nan)  # fall back for output
         self.winners = np.full(num_buckets, -1, int)  # fallback for winners
 
-    def hard_reduce(
+    def reduce(
+        self,
+        metrics: np.ndarray,
+        output=None,
+        winners=None,
+        compute_softmax=False,
+    ):
+        """_summary_
+
+        Args:
+            metrics (np.ndarray): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        assert len(metrics) == self.num
+        if output is None:
+            output = self.output
+        assert len(output) == self.num_buckets
+
+        if self.temperature == 0:
+            if winners is None:
+                winners = self.winners
+            self._hard_reduce(metrics, output, winners)
+        else:
+            self._soft_reduce(metrics, output, compute_softmax)
+
+    def _hard_reduce(
         self, metrics: np.ndarray, output: np.ndarray, winners: np.ndarray
     ):
         """_summary_
@@ -177,7 +229,7 @@ class MultiReducer(BaseReducer):
                 output[bucket] = metric
                 winners[bucket] = index
 
-    def soft_reduce(
+    def _soft_reduce(
         self, metrics: np.ndarray, output: np.ndarray, compute_softmax
     ):
         """_summary_
@@ -222,33 +274,6 @@ class MultiReducer(BaseReducer):
 
         if self.temperature != 1:
             output *= self.temperature
-
-    def reduce(
-        self,
-        metrics: np.ndarray,
-        output=None,
-        winners=None,
-        compute_softmax=False,
-    ):
-        """_summary_
-
-        Args:
-            metrics (np.ndarray): _description_
-
-        Returns:
-            _type_: _description_
-        """
-        assert len(metrics) == self.num
-        if output is None:
-            output = self.output
-        assert len(output) == self.num_buckets
-
-        if self.temperature == 0:
-            if winners is None:
-                winners = self.winners
-            self.hard_reduce(metrics, output, winners)
-        else:
-            self.soft_reduce(metrics, output, compute_softmax)
 
     def sample_softmax(self, winners=None):
         """_summary_

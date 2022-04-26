@@ -4,7 +4,7 @@ import functools
 import time
 import numpy as np
 from scipy.special import logsumexp
-import pylab
+import matplotlib.pyplot as plt
 from numba import njit
 
 
@@ -143,8 +143,8 @@ for p in range(10):
     method += 1
 
 for method, name in enumerate(names):
-    pylab.semilogy(times[method], label=f"{name}")
-    pylab.legend()
+    plt.semilogy(times[method], label=f"{name}")
+    plt.legend()
 
-pylab.grid()
-pylab.show()
+plt.grid()
+plt.show()
