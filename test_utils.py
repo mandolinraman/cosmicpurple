@@ -19,38 +19,27 @@ result = aggregate(metrics, num_buckets, buckets)
 
 # single reducer
 red0 = Reducer(num, temperature=0)
-red1 = Reducer(num, temperature=1)
-
 b0, i0 = red0.reduce(metrics)
-assert i0 == np.argmax(metrics)
-print(b0 == np.max(metrics))
+print(b0 - np.max(metrics))  # 0
 
-b1 = red1.reduce(metrics)
-print(b1 - logsumexp(metrics))
+red1 = Reducer(num, temperature=1)
+b1 = red1.reduce(metrics, compute_softmax=True)
+print(b1 - logsumexp(metrics))  # 0
 
 ## multi reducer
 multired0 = MultiReducer(num_buckets, buckets, temperature=0)
-multired1 = MultiReducer(num_buckets, buckets, temperature=1)
-
-locations = [np.where(buckets == i)[0] for i in range(num_buckets)]
-
 b0 = np.zeros(num_buckets)
 multired0.reduce(metrics, output=b0)
-b0a = np.array([np.max(metrics[locations[i]]) for i in range(num_buckets)])
-b0b = np.array(
-    [np.max([metrics[j] for j in locations[i]]) for i in range(num_buckets)]
-)
-
-print(np.linalg.norm(b0 - b0a))
-print(np.linalg.norm(b0 - b0b))
+# preprocess the buckets
+locations = [np.where(buckets == i)[0] for i in range(num_buckets)]
+b0_alt = np.array([np.max(metrics[locations[i]]) for i in range(num_buckets)])
+print(np.linalg.norm(b0 - b0_alt))  # 0
 
 # soft reduce
+multired1 = MultiReducer(num_buckets, buckets, temperature=1)
 b1 = np.zeros(num_buckets)
-multired1.reduce(metrics, output=b1)
-b1a = np.array([logsumexp(metrics[locations[i]]) for i in range(num_buckets)])
-b1b = np.array(
-    [logsumexp([metrics[j] for j in locations[i]]) for i in range(num_buckets)]
+multired1.reduce(metrics, output=b1, compute_softmax=True)
+b1_alt = np.array(
+    [logsumexp(metrics[locations[i]]) for i in range(num_buckets)]
 )
-
-print(np.linalg.norm(b1 - b1a))
-print(np.linalg.norm(b1 - b1b))
+print(np.linalg.norm(b1 - b1_alt))  # 0

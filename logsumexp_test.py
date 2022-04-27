@@ -5,10 +5,10 @@ import time
 import numpy as np
 from scipy.special import logsumexp
 import matplotlib.pyplot as plt
-from numba import njit
+from numba import jit
 
 
-@njit
+@jit
 def softmax(path_metric):
     """
     Compute the soft max operation of all incoming pathmetrics at each state
@@ -39,7 +39,7 @@ def softmax(path_metric):
 # )
 
 
-@njit
+@jit
 def softmax_step_tuple(t, u):
     "softmax step tuple version"
     return (
@@ -49,7 +49,7 @@ def softmax_step_tuple(t, u):
     )
 
 
-@njit
+@jit
 def softmax_step_tuple_alt(t, u):
     "softmax step tuple version"
     delta = t[0] - u
@@ -60,7 +60,7 @@ def softmax_step_tuple_alt(t, u):
     )
 
 
-@njit
+@jit
 def softmax_step_inplace(t, u):
     "softmax step inplace version"
     delta = t[0] - u

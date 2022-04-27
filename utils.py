@@ -3,12 +3,11 @@ in a numerically stable way.
 """
 
 import numpy as np
-
-from numba import njit
 from scipy.special import logsumexp
+from numba import jit
 
 
-@njit
+@jit
 def aggregate_simple(values, weights=None, small_weight=0.0):
     """_summary_
 
@@ -31,7 +30,7 @@ def aggregate_simple(values, weights=None, small_weight=0.0):
     return result
 
 
-@njit
+@jit
 def aggregate(values, num_buckets, buckets, weights=None, small_weight=0.0):
     """_summary_
 
@@ -55,7 +54,7 @@ def aggregate(values, num_buckets, buckets, weights=None, small_weight=0.0):
     return result
 
 
-@njit
+@jit
 def aggregate_max(
     metrics: np.ndarray,
     buckets: np.ndarray,
@@ -72,6 +71,89 @@ def aggregate_max(
     for index, (metric, bucket) in enumerate(zip(metrics, buckets)):
         if metric > output[bucket]:
             output[bucket] = metric
+            winners[bucket] = index
+
+
+@jit
+def aggregate_softmax(
+    metrics, buckets, output, compute_softmax, log_softmax_pmf
+):
+    """_summary_
+
+    Args:
+        metrics (_type_): _description_
+        buckets (_type_): _description_
+        output (_type_): _description_
+        compute_softmax (_type_): _description_
+        log_softmax_pmf (_type_): _description_
+    """
+    output.fill(-np.inf)
+    gamma = np.zeros_like(output)
+    for metric, bucket in zip(metrics, buckets):
+        # to prevent nan warnings when both terms are +/- np.inf:
+        if output[bucket] == metric:
+            delta = 0
+        else:
+            delta = output[bucket] - metric
+
+        if delta < 0:
+            gamma[bucket] = gamma[bucket] * np.exp(delta) + 1.0
+            output[bucket] = metric
+        else:
+            gamma[bucket] += np.exp(-delta)
+
+    log_gamma = np.log(gamma)
+    output += log_gamma  # softMax operation
+
+    if compute_softmax:
+        for index, (metric, bucket) in enumerate(zip(metrics, buckets)):
+            log_softmax_pmf[index] = (
+                -log_gamma[bucket]
+                if output[bucket] == metric
+                else metric - output[bucket]
+            )
+
+
+@jit
+def sample_pmf(pmf):
+    """_summary_
+
+    Args:
+        metrics (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    urand = np.random.rand()
+    winner = len(pmf) - 1
+    for index, prob in enumerate(pmf):
+        urand -= prob
+        if urand < 0:
+            winner = index
+            break
+
+    return winner
+
+
+@jit
+def sample_multi_pmf(pmf, buckets, winners):
+    """_summary_
+
+    Args:
+        samples (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    winners.fill(-1)
+    urand = np.random.rand(len(winners))
+    for index, (prob, bucket) in enumerate(zip(pmf, buckets)):
+        if winners[bucket] != -1:
+            continue
+
+        urand[bucket] -= prob
+        if urand[bucket] < 0:
             winners[bucket] = index
 
 
@@ -137,7 +219,7 @@ class Reducer(BaseReducer):
             _type_: _description_
         """
         assert len(metrics) == self.num
-        if self.temperature == 0:
+        if self.temperature == 0.0:
             return self._hard_reduce(metrics)
         return self._soft_reduce(metrics, compute_softmax)
 
@@ -166,16 +248,14 @@ class Reducer(BaseReducer):
         Returns:
             _type_: _description_
         """
-        if self.temperature != 1:
-            scaled_metrics = metrics / self.temperature
-        else:
-            scaled_metrics = metrics
+        if self.temperature != 1.0:
+            metrics = metrics / self.temperature
+        self.output = logsumexp(metrics)  # softmax(metrics)
 
-        self.output = logsumexp(scaled_metrics)  # softmax(metrics)
         if compute_softmax:
             # first deal with corner cases:
             if self.output == np.inf:
-                temp = scaled_metrics == np.inf
+                temp = metrics == np.inf
                 self.log_softmax_pmf.fill(-np.inf)
                 self.log_softmax_pmf[temp] = -np.log(sum(temp))
             elif self.output == -np.inf:
@@ -183,9 +263,9 @@ class Reducer(BaseReducer):
                 self.log_softmax_pmf.fill(-np.log(self.num))
             else:
                 # normal case (all finite)
-                self.log_softmax_pmf = scaled_metrics - self.output
+                self.log_softmax_pmf = metrics - self.output
 
-        if self.temperature != 1:
+        if self.temperature != 1.0:
             self.output *= self.temperature
 
         return self.output
@@ -199,15 +279,7 @@ class Reducer(BaseReducer):
         Returns:
             _type_: _description_
         """
-
-        urand = np.random.rand()
-        self.winner = self.num - 1
-        for index, prob in enumerate(self.softmax_pmf):
-            urand -= prob
-            if urand < 0:
-                self.winner = index
-                break
-
+        self.winner = sample_pmf(self.softmax_pmf)
         return self.winner
 
 
@@ -254,6 +326,7 @@ class MultiReducer(BaseReducer):
         if self.temperature == 0:
             if winners is None:
                 winners = self.winners
+            assert len(winners) == self.num_buckets
             self._hard_reduce(metrics, output, winners)
         else:
             self._soft_reduce(metrics, output, compute_softmax)
@@ -267,11 +340,7 @@ class MultiReducer(BaseReducer):
             metrics (_type_): _description_
             reduced (_type_): _description_
         """
-        output.fill(-np.inf)
-        for index, (metric, bucket) in enumerate(zip(metrics, self.buckets)):
-            if metric > output[bucket]:
-                output[bucket] = metric
-                winners[bucket] = index
+        aggregate_max(metrics, self.buckets, output, winners)
 
     def _soft_reduce(
         self, metrics: np.ndarray, output: np.ndarray, compute_softmax
@@ -283,40 +352,18 @@ class MultiReducer(BaseReducer):
             reduced (_type_): _description_
             compute_softmax (bool, optional): _description_. Defaults to False.
         """
-        if self.temperature != 1:
-            scaled_metrics = metrics / self.temperature
-        else:
-            scaled_metrics = metrics
+        if self.temperature != 1.0:
+            metrics = metrics / self.temperature
 
-        output.fill(-np.inf)
-        gamma = np.zeros_like(output)
-        for metric, bucket in zip(scaled_metrics, self.buckets):
-            # to prevent nan warnings when both terms are +/- np.inf:
-            if output[bucket] == metric:
-                delta = 0
-            else:
-                delta = output[bucket] - metric
+        aggregate_softmax(
+            metrics,
+            self.buckets,
+            output,
+            compute_softmax,
+            self.log_softmax_pmf,
+        )
 
-            if delta < 0:
-                gamma[bucket] = gamma[bucket] * np.exp(delta) + 1.0
-                output[bucket] = metric
-            else:
-                gamma[bucket] += np.exp(-delta)
-
-        log_gamma = np.log(gamma)
-        output += log_gamma  # softMax operation
-
-        if compute_softmax:
-            for index, (metric, bucket) in enumerate(
-                zip(scaled_metrics, self.buckets)
-            ):
-                self.log_softmax_pmf[index] = (
-                    -log_gamma[bucket]
-                    if output[bucket] == metric
-                    else metric - output[bucket]
-                )
-
-        if self.temperature != 1:
+        if self.temperature != 1.0:
             output *= self.temperature
 
     def sample_softmax(self, winners=None):
@@ -332,14 +379,4 @@ class MultiReducer(BaseReducer):
             winners = self.winners
         assert len(winners) == self.num_buckets
 
-        winners.fill(-1)
-        urand = np.random.rand(self.num_buckets)
-        for index, (prob, bucket) in enumerate(
-            zip(self.softmax_pmf, self.buckets)
-        ):
-            if winners[bucket] != -1:
-                continue
-
-            urand[bucket] -= prob
-            if urand[bucket] < 0:
-                winners[bucket] = index
+        sample_multi_pmf(self.softmax_pmf, self.buckets, winners)
