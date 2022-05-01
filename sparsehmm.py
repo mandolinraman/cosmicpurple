@@ -95,7 +95,7 @@ class SparseHMM:
         self._compute_log_emission_prob(obs, log_emission_prob)
 
         # start iterations
-        for i, obs_i in enumerate(obs):
+        for i in range(num_obs):
             # compute all accumulated path metrics:
             pathmetric = (
                 metric[self.from_state]
@@ -186,9 +186,8 @@ class SparseHMM:
         edge_reducer = Reducer(self.num_edges)
 
         # precompute and cache the emission probabilities
-        log_emission_prob = np.zeros((num_obs, self.num_emitters))
-        for i, obs_i in enumerate(obs):
-            self._compute_log_emission_prob(obs_i, log_emission_prob[i])
+        log_emission_prob = np.zeros((self.num_emitters, num_obs))
+        self._compute_log_emission_prob(obs, log_emission_prob)
 
         # forward pass
         # log_alpha = np.zeros((num_obs, self.num_states))
@@ -199,7 +198,7 @@ class SparseHMM:
             pathmetric = (
                 metric[self.from_state]
                 + self.log_trans_prob
-                + log_emission_prob[i, self.edge_to_emitter]
+                + log_emission_prob[self.edge_to_emitter, i]
             )
 
             # cache the forward pathmetrics in log-app:
@@ -229,7 +228,7 @@ class SparseHMM:
             pathmetric = (
                 to_state_metric
                 + self.log_trans_prob
-                + log_emission_prob[i, self.edge_to_emitter]
+                + log_emission_prob[self.edge_to_emitter, i]
             )
             backward_reducer.reduce(pathmetric, output=metric)
 
@@ -292,8 +291,27 @@ class SparseHMM:
         metric = np.log(self.iprob)
         log_emission_prob = np.zeros(self.num_emitters)
 
+        # First time setup:
+        # Every state maintains an expectation of the partial summary
+        # conditioned on passing through that state at time i. Let's
+        # define a "summarizer" for each unique emitter at every state.
+        # A summarizer is basically an emitter whose "summary" methods
+        # are the only things called.
+        summarizers, new_summarizers = [
+            [
+                [emitter.copy() for emitter in self.emitters]
+                for _ in range(self.num_states)
+            ]
+            for _ in range(2)
+        ]
+        # Similarly keep track of soft edge counts conditioned
+        # on each state at time i in the forward pass:
+        edgecounts, new_edgecounts = [
+            np.zeros((self.num_states, self.num_edges)) for _ in range(2)
+        ]
+
         # start iterations
-        for i, obs_i in enumerate(obs):
+        for obs_i in obs:
             self._compute_log_emission_prob(obs_i, log_emission_prob)
             # compute all accumulated forward path metrics:
             pathmetric = (
@@ -308,32 +326,11 @@ class SparseHMM:
             )
             pmf = forward_reducer.softmax_pmf
 
-            if i == 0:
-                # First time setup:
-                # Every state maintains an expectation of the partial summary
-                # conditioned on passing through that state at time i. Let's
-                # define a "summarizer" for each unique emitter at every state.
-                # A summarizer is basically an emitter whose "summary" methods
-                # are the only things called.
-                summarizers, new_summarizers = [
-                    [
-                        [emitter.copy() for emitter in self.emitters]
-                        for _ in range(self.num_states)
-                    ]
-                    for _ in range(2)
-                ]
-                # Similarly keep track of soft edge counts conditioned
-                # on each state at time i in the forward pass:
-                edgecounts, new_edgecounts = [
-                    np.zeros((self.num_states, self.num_edges))
-                    for _ in range(2)
-                ]
-            else:
-                # clear new summaries
-                new_edgecounts.fill(0)
-                for state in range(self.num_states):
-                    for summarizer in new_summarizers[state]:
-                        summarizer.clear_summaries()
+            # clear new summaries
+            new_edgecounts.fill(0)
+            for state in range(self.num_states):
+                for summarizer in new_summarizers[state]:
+                    summarizer.clear_summaries()
 
             # compute new summaries
             # new_edgecounts += aggregate(
@@ -378,9 +375,6 @@ class SparseHMM:
 
         self.summaries += np.dot(pmf, edgecounts)
         for state, prob in enumerate(pmf):
-            if prob <= small_probability:
-                continue
-
             for emitter, summarizer in zip(self.emitters, summarizers[state]):
                 emitter.steal_summaries_from(summarizer, prob)
 
