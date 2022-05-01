@@ -239,7 +239,13 @@ class SparseHMM:
 
         return log_app, log_probability
 
-    def summarize(self, obs: np.ndarray, algorithm, temperature=0.0):
+    def summarize(
+        self,
+        obs: np.ndarray,
+        algorithm,
+        small_probability=1e-30,
+        temperature=0.0,
+    ):
         """_summary_
 
         Args:
@@ -249,7 +255,7 @@ class SparseHMM:
         if algorithm == "forward_backward":
             self._forward_backward_summarize(obs)
         elif algorithm == "forward":
-            self._forward_summarize(obs)
+            self._forward_summarize(obs, small_probability)
         elif algorithm == "viterbi":
             self._viterbi_summarize(obs, temperature=temperature)
 
@@ -275,7 +281,7 @@ class SparseHMM:
         for edge, emitter_index in enumerate(self.edge_to_emitter):
             self.emitters[emitter_index].summarize(obs, weights=app[:, edge])
 
-    def _forward_summarize(self, obs: np.ndarray, small_probability=0.0):
+    def _forward_summarize(self, obs: np.ndarray, small_probability=1e-30):
         """_summary_
 
         Args:
@@ -338,6 +344,13 @@ class SparseHMM:
                         summarizer.clear_summaries()
 
             # compute new summaries
+            # new_edgecounts += aggregate(
+            #     edgecounts[self.from_state],
+            #     self.num_states,
+            #     self.to_state,
+            #     pmf,
+            #     small_probability,
+            # )
             for from_state, to_state, prob in zip(
                 self.from_state, self.to_state, pmf
             ):
@@ -345,14 +358,13 @@ class SparseHMM:
                     continue
 
                 new_edgecounts[to_state] += prob * edgecounts[from_state]
-
                 for origin, destination in zip(
                     summarizers[from_state], new_summarizers[to_state]
                 ):
                     destination.steal_summaries_from(origin, prob)
 
+            # new terms:
             new_edgecounts[self.to_state, range(self.num_edges)] += pmf
-
             for prob, to_state, emitter_index in zip(
                 pmf, self.to_state, self.edge_to_emitter
             ):
@@ -363,6 +375,7 @@ class SparseHMM:
                 new_summarizers[to_state][emitter_index].summarize(
                     obs[i], prob
                 )
+
             # swap edgecounts
             edgecounts, new_edgecounts = new_edgecounts, edgecounts
 
@@ -420,7 +433,7 @@ class SparseHMM:
             emitter.clear_summaries()
 
     def compute_expectation(
-        self, obs: np.ndarray, get_tensor, algorithm, small_probability=0.0
+        self, obs: np.ndarray, get_tensor, algorithm, small_probability=1e-30
     ):
         """_summary_
 
@@ -445,7 +458,6 @@ class SparseHMM:
         Args:
             obs (np.ndarray): _description_
             get_tensor (_type_, optional): _description_. Defaults to None.
-            small_probability (float, optional): _description_. Defaults to 0.0.
         """
         num_obs = len(obs)
 
@@ -470,7 +482,7 @@ class SparseHMM:
         return expectations
 
     def _forward_expectation(
-        self, obs: np.ndarray, get_tensor=None, small_probability=0.0
+        self, obs: np.ndarray, get_tensor=None, small_probability=1e-30
     ):
         """_summary_
 
@@ -537,11 +549,6 @@ class SparseHMM:
                     weights=pmf,
                     small_weight=small_probability,
                 )
-                # for edge, prob in enumerate(pmf):
-                #     if prob > small_probability:
-                #         new_expectation[self.to_state[edge]] += prob * (
-                #             expectation[self.from_state[edge]] + tensor[edge]
-                #         )
 
             # swap the two
             expectations, new_expectations = new_expectations, expectations

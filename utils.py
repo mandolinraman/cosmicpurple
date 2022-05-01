@@ -8,7 +8,7 @@ from numba import jit
 
 
 @jit
-def aggregate_simple(values, weights=None, small_weight=0.0):
+def aggregate_simple(values, weights=None, small_weight=1e-30):
     """_summary_
 
     Args:
@@ -31,7 +31,7 @@ def aggregate_simple(values, weights=None, small_weight=0.0):
 
 
 @jit
-def aggregate(values, num_buckets, buckets, weights=None, small_weight=0.0):
+def aggregate(values, num_buckets, buckets, weights=None, small_weight=1e-30):
     """_summary_
 
     Args:
