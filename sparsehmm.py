@@ -27,7 +27,6 @@ class SparseHMM:
             iprob (_type_, optional): _description_. Defaults to None.
             fprob (_type_, optional): _description_. Defaults to None.
         """
-
         # topology
         self.num_edges = len(adj_list)
         self.num_states = 1 + adj_list.max()
@@ -79,7 +78,6 @@ class SparseHMM:
             s (_type_): _description_
             sample (bool, optional): _description_. Defaults to False.
         """
-
         num_obs = len(obs)
 
         # max/softmax reducers:
@@ -91,16 +89,18 @@ class SparseHMM:
         # allocate space for trace back
         winning_edge = np.zeros((num_obs, self.num_states), int)
         metric = np.log(self.iprob)
-        log_emission_prob = np.zeros(self.num_emitters)
+
+        # precompute all emission probs for efficiency
+        log_emission_prob = np.zeros((self.num_emitters, num_obs))
+        self._compute_log_emission_prob(obs, log_emission_prob)
 
         # start iterations
-        for i in range(num_obs):
-            self._compute_log_emission_prob(obs[i], log_emission_prob)
+        for i, obs_i in enumerate(obs):
             # compute all accumulated path metrics:
             pathmetric = (
                 metric[self.from_state]
                 + self.log_trans_prob
-                + log_emission_prob[self.edge_to_emitter]
+                + log_emission_prob[self.edge_to_emitter, i]
             )
 
             # if we want to sample the APP distribution, we apply
@@ -144,9 +144,6 @@ class SparseHMM:
         Returns:
             _type_: _description_
         """
-
-        num_obs = len(obs)
-
         # max/softmax reducers:
         forward_reducer = MultiReducer(self.num_states, self.to_state)
         state_reducer = Reducer(self.num_states)
@@ -156,8 +153,8 @@ class SparseHMM:
         log_emission_prob = np.zeros(self.num_emitters)
 
         # start iterations
-        for i in range(num_obs):
-            self._compute_log_emission_prob(obs[i], log_emission_prob)
+        for obs_i in obs:
+            self._compute_log_emission_prob(obs_i, log_emission_prob)
             # compute all accumulated forward path metrics:
             pathmetric = (
                 metric[self.from_state]
@@ -180,7 +177,6 @@ class SparseHMM:
         Returns:
             _type_: _description_
         """
-
         num_obs = len(obs)
 
         # max/softmax reducers:
@@ -191,8 +187,8 @@ class SparseHMM:
 
         # precompute and cache the emission probabilities
         log_emission_prob = np.zeros((num_obs, self.num_emitters))
-        for i in range(num_obs):
-            self._compute_log_emission_prob(obs[i], log_emission_prob[i])
+        for i, obs_i in enumerate(obs):
+            self._compute_log_emission_prob(obs_i, log_emission_prob[i])
 
         # forward pass
         # log_alpha = np.zeros((num_obs, self.num_states))
@@ -251,7 +247,6 @@ class SparseHMM:
         Args:
             obs (np.ndarray): _description_
         """
-
         if algorithm == "forward_backward":
             self._forward_backward_summarize(obs)
         elif algorithm == "forward":
@@ -268,7 +263,6 @@ class SparseHMM:
         Returns:
             _type_: _description_
         """
-
         log_app, _ = self.forward_backward(obs)
         # log_edge_count = logsumexp(log_app, axis=0, compute_softmax=True)
         app = np.exp(log_app)
@@ -290,8 +284,6 @@ class SparseHMM:
         Returns:
             _type_: _description_
         """
-        num_obs = len(obs)
-
         # max/softmax reducers:
         forward_reducer = MultiReducer(self.num_states, self.to_state)
         state_reducer = Reducer(self.num_states)
@@ -301,8 +293,8 @@ class SparseHMM:
         log_emission_prob = np.zeros(self.num_emitters)
 
         # start iterations
-        for i in range(num_obs):
-            self._compute_log_emission_prob(obs[i], log_emission_prob)
+        for i, obs_i in enumerate(obs):
+            self._compute_log_emission_prob(obs_i, log_emission_prob)
             # compute all accumulated forward path metrics:
             pathmetric = (
                 metric[self.from_state]
@@ -372,9 +364,7 @@ class SparseHMM:
                     continue
 
                 # for edge, to_state in enumerate(self.to_state):
-                new_summarizers[to_state][emitter_index].summarize(
-                    obs[i], prob
-                )
+                new_summarizers[to_state][emitter_index].summarize(obs_i, prob)
 
             # swap edgecounts
             edgecounts, new_edgecounts = new_edgecounts, edgecounts
@@ -439,8 +429,16 @@ class SparseHMM:
 
         Args:
             obs (np.ndarray): _description_
-            get_tensor (_type_, optional): _description_. Defaults to None.
-            small_probability (float, optional): _description_. Defaults to 0.0.
+            get_tensor (_type_): _description_
+            algorithm (_type_): _description_
+            small_probability (_type_, optional): _description_.
+                Defaults to 1e-30.
+
+        Raises:
+            ValueError: _description_
+
+        Returns:
+            _type_: _description_
         """
         if algorithm == "forward_backward":
             return self._forward_backward_expectation(obs, get_tensor)
@@ -459,17 +457,15 @@ class SparseHMM:
             obs (np.ndarray): _description_
             get_tensor (_type_, optional): _description_. Defaults to None.
         """
-        num_obs = len(obs)
-
         log_app, _ = self.forward_backward(obs)
         app = np.exp(log_app)
 
-        for i in range(num_obs):
+        for i, obs_i in enumerate(obs):
             # Get a list of tensors that need to be averaged w.r.t.
             # the posterior probability. The 1st dimension of each
             # tensor is the edge index:
             #   tensors[i][e, ...] = the i-th tensor on edge e
-            tensors = get_tensor(i, obs[i])
+            tensors = get_tensor(i, obs_i)
             if i == 0:
                 # First time setup: get tensor sizes
                 expectations = [
@@ -492,8 +488,6 @@ class SparseHMM:
         Returns:
             _type_: _description_
         """
-        num_obs = len(obs)
-
         # max/softmax reducers:
         forward_reducer = MultiReducer(self.num_states, self.to_state)
         state_reducer = Reducer(self.num_states)
@@ -503,8 +497,8 @@ class SparseHMM:
         log_emission_prob = np.zeros(self.num_emitters)
 
         # start iterations
-        for i in range(num_obs):
-            self._compute_log_emission_prob(obs[i], log_emission_prob)
+        for i, obs_i in enumerate(obs):
+            self._compute_log_emission_prob(obs_i, log_emission_prob)
             # compute all accumulated forward path metrics:
             pathmetric = (
                 metric[self.from_state]
@@ -522,7 +516,7 @@ class SparseHMM:
             # the posterior probability. The 1st dimension of each
             # tensor is the edge index:
             #   tensors[i][e, ...] = the i-th tensor on edge e
-            tensors = get_tensor(i, obs[i])
+            tensors = get_tensor(i, obs_i)
             if i == 0:
                 # First time setup: get tensor sizes.
                 # Every state maintains an expectation of the partial sum
@@ -556,9 +550,7 @@ class SparseHMM:
         metric += np.log(self.fprob)
         _ = state_reducer.reduce(metric, compute_softmax=True)
         pmf = state_reducer.softmax_pmf
-        new_expectations = [
+        return [
             np.einsum("s, s... -> ...", pmf, expectation)
             for expectation in expectations
         ]
-
-        return new_expectations
