@@ -275,13 +275,111 @@ class SparseHMM:
         for edge, emitter_index in enumerate(self.edge_to_emitter):
             self.emitters[emitter_index].summarize(obs, weights=app[:, edge])
 
-    def _forward_summarize(self, obs: np.ndarray):
+    def _forward_summarize(self, obs: np.ndarray, small_probability=0.0):
         """_summary_
 
         Args:
-            obs (np.ndarray): _description_
+            obs (_type_): _description_
+
+        Returns:
+            _type_: _description_
         """
-        raise NotImplementedError
+        num_obs = len(obs)
+
+        # max/softmax reducers:
+        forward_reducer = MultiReducer(self.num_states, self.to_state)
+        state_reducer = Reducer(self.num_states)
+
+        # allocate space
+        metric = np.log(self.iprob)
+        log_emission_prob = np.zeros(self.num_emitters)
+
+        # start iterations
+        for i in range(num_obs):
+            self._compute_log_emission_prob(obs[i], log_emission_prob)
+            # compute all accumulated forward path metrics:
+            pathmetric = (
+                metric[self.from_state]
+                + self.log_trans_prob
+                + log_emission_prob[self.edge_to_emitter]
+            )
+
+            # apply softmax to the converging metrics:
+            forward_reducer.reduce(
+                pathmetric, output=metric, compute_softmax=True
+            )
+            pmf = forward_reducer.softmax_pmf
+
+            if i == 0:
+                # First time setup:
+                # Every state maintains an expectation of the partial summary
+                # conditioned on passing through that state at time i. Let's
+                # define a "summarizer" for each unique emitter at every state.
+                # A summarizer is basically an emitter whose "summary" methods
+                # are the only things called.
+                summarizers, new_summarizers = [
+                    [
+                        [emitter.copy() for emitter in self.emitters]
+                        for _ in range(self.num_states)
+                    ]
+                    for _ in range(2)
+                ]
+                # Similarly keep track of soft edge counts conditioned
+                # on each state at time i in the forward pass:
+                edgecounts, new_edgecounts = [
+                    np.zeros((self.num_states, self.num_edges))
+                    for _ in range(2)
+                ]
+            else:
+                # clear new summaries
+                new_edgecounts.fill(0)
+                for state in range(self.num_states):
+                    for summarizer in new_summarizers[state]:
+                        summarizer.clear_summaries()
+
+            # compute new summaries
+            for from_state, to_state, prob in zip(
+                self.from_state, self.to_state, pmf
+            ):
+                if prob <= small_probability:
+                    continue
+
+                new_edgecounts[to_state] += prob * edgecounts[from_state]
+
+                for origin, destination in zip(
+                    summarizers[from_state], new_summarizers[to_state]
+                ):
+                    destination.steal_summaries_from(origin, prob)
+
+            new_edgecounts[self.to_state, range(self.num_edges)] += pmf
+
+            for prob, to_state, emitter_index in zip(
+                pmf, self.to_state, self.edge_to_emitter
+            ):
+                if prob <= small_probability:
+                    continue
+
+                # for edge, to_state in enumerate(self.to_state):
+                new_summarizers[to_state][emitter_index].summarize(
+                    obs[i], prob
+                )
+            # swap edgecounts
+            edgecounts, new_edgecounts = new_edgecounts, edgecounts
+
+            # swap the two
+            summarizers, new_summarizers = new_summarizers, summarizers
+
+        metric += np.log(self.fprob)
+        _ = state_reducer.reduce(metric, compute_softmax=True)
+        pmf = state_reducer.softmax_pmf
+
+        self.summaries += np.dot(pmf, edgecounts)
+        for state, prob in enumerate(pmf):
+            if prob <= small_probability:
+                continue
+
+            for emitter, summarizer in zip(self.emitters, summarizers[state]):
+                emitter.steal_summaries_from(summarizer, prob)
 
     def _viterbi_summarize(self, obs: np.ndarray, temperature: float = 0.0):
         """_summary_
@@ -361,13 +459,15 @@ class SparseHMM:
             #   tensors[i][e, ...] = the i-th tensor on edge e
             tensors = get_tensor(i, obs[i])
             if i == 0:
-                # first time setup:
-                results = [np.zeros(tensor.shape[1:]) for tensor in tensors]
+                # First time setup: get tensor sizes
+                expectations = [
+                    np.zeros(tensor.shape[1:]) for tensor in tensors
+                ]
 
-            for result, tensor in zip(results, tensors):
-                result += np.einsum("e, e... -> ...", app[i], tensor)
+            for expectation, tensor in zip(expectations, tensors):
+                expectation += np.einsum("e, e... -> ...", app[i], tensor)
 
-        return results
+        return expectations
 
     def _forward_expectation(
         self, obs: np.ndarray, get_tensor=None, small_probability=0.0
@@ -412,24 +512,26 @@ class SparseHMM:
             #   tensors[i][e, ...] = the i-th tensor on edge e
             tensors = get_tensor(i, obs[i])
             if i == 0:
-                # first time setup:
-                results = [
-                    np.zeros((self.num_states,) + tensor.shape[1:])
-                    for tensor in tensors
-                ]
-                new_results = [
-                    np.zeros((self.num_states,) + tensor.shape[1:])
-                    for tensor in tensors
+                # First time setup: get tensor sizes.
+                # Every state maintains an expectation of the partial sum
+                # of each each tensor sequence conditioned on passing through
+                # that state at time i
+                expectations, new_expectations = [
+                    [
+                        np.zeros((self.num_states,) + tensor.shape[1:])
+                        for tensor in tensors
+                    ]
+                    for _ in range(2)
                 ]
             else:
-                for tensor in new_results:
+                for tensor in new_expectations:
                     tensor.fill(0)
 
-            for result, new_result, tensor in zip(
-                results, new_results, tensors
+            for expectation, new_expectation, tensor in zip(
+                expectations, new_expectations, tensors
             ):
-                new_result += aggregate(
-                    result[self.from_state] + tensor,
+                new_expectation += aggregate(
+                    expectation[self.from_state] + tensor,
                     self.num_states,
                     self.to_state,
                     weights=pmf,
@@ -437,18 +539,19 @@ class SparseHMM:
                 )
                 # for edge, prob in enumerate(pmf):
                 #     if prob > small_probability:
-                #         new_result[self.to_state[edge]] += prob * (
-                #             result[self.from_state[edge]] + tensor[edge]
+                #         new_expectation[self.to_state[edge]] += prob * (
+                #             expectation[self.from_state[edge]] + tensor[edge]
                 #         )
 
             # swap the two
-            results, new_results = new_results, results
+            expectations, new_expectations = new_expectations, expectations
 
         metric += np.log(self.fprob)
         _ = state_reducer.reduce(metric, compute_softmax=True)
         pmf = state_reducer.softmax_pmf
-        new_results = [
-            np.einsum("s, s... -> ...", pmf, result) for result in results
+        new_expectations = [
+            np.einsum("s, s... -> ...", pmf, expectation)
+            for expectation in expectations
         ]
 
-        return new_results
+        return new_expectations

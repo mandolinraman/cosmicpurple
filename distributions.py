@@ -22,11 +22,38 @@ def handle_nan(log_prob):
     return log_prob
 
 
+def convert_to_array(values, ndims=1, dtype=np.float64):
+    """_summary_
+
+    Args:
+        points (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    values = np.array(values, dtype=dtype)
+    assert values.ndim <= ndims
+    while values.ndim < ndims:
+        values = values[np.newaxis, ...]
+
+    return values
+
+
 class Distribution:
     """_summary_"""
 
     def __init__(self):
-        pass
+        self.summaries = []
+
+    @property
+    def parameters(self):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        return ()
 
     def probability(self, points):
         """_summary_
@@ -49,6 +76,48 @@ class Distribution:
             NotImplementedError: _description_
         """
         raise NotImplementedError
+
+    def clear_summaries(self):
+        """_summary_"""
+        # default implementation works for
+        # - tensors
+        # - list of tensors
+        # - dictionary of tensors
+        if isinstance(self.summaries, np.ndarray):
+            self.summaries.fill(0)
+        elif isinstance(self.summaries, list):
+            for entry in self.summaries:
+                entry.fill(0)
+        elif isinstance(self.summaries, dict):
+            for entry in self.summaries.values():
+                entry.fill(0)
+
+    def steal_summaries_from(self, other, weight=1.0):
+        """_summary_"""
+        # default implementation works for
+        # - tensors
+        # - list of tensors
+        # - dictionary of tensors
+        if isinstance(self.summaries, np.ndarray):
+            self.summaries += weight * other.summaries
+        elif isinstance(self.summaries, list):
+            for ours, theirs in zip(self.summaries, other.summaries):
+                ours += weight * theirs
+        elif isinstance(self.summaries, dict):
+            for key in self.summaries:
+                self.summaries[key] += weight * other.summaries[key]
+
+    def copy(self, steal_summaries=False):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        clone = self.__class__(*self.parameters)
+        if steal_summaries:
+            clone.steal_summaries_from(self)
+
+        return clone
 
 
 class DiscreteDistribution(Distribution):
@@ -74,6 +143,15 @@ class DiscreteDistribution(Distribution):
         self.d = 1
         self.summaries = np.zeros(self.num_symbols)
 
+    @property
+    def parameters(self):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        return (self.pmf.tolist(),)
+
     def log_probability(self, points) -> float:
         """_summary_
 
@@ -98,10 +176,15 @@ class DiscreteDistribution(Distribution):
             points (np.ndarray): _description_
             weights (_type_, optional): _description_. Defaults to None.
         """
+        # points can be 0 dimensional (single data point)
+        # or 1 dimensional (batch of points)
+        points = convert_to_array(points, ndims=1, dtype=int)
+
         if weights is None:
             weights = np.ones(points.shape[0])
+        else:
+            weights = convert_to_array(weights, ndims=1)
 
-        points = points.squeeze().astype(int)
         for i in range(self.num_symbols):
             self.summaries[i] += weights[points == i].sum()
 
@@ -116,10 +199,6 @@ class DiscreteDistribution(Distribution):
         self.pmf = inertia * self.pmf + (1 - inertia) * new_pmf
         self.log_pmf[: self.num_symbols] = np.log(self.pmf)
         self.clear_summaries()
-
-    def clear_summaries(self):
-        """_summary_"""
-        self.summaries.fill(0)
 
     @classmethod
     def from_samples(cls, points, num, weights=None):
@@ -170,6 +249,15 @@ class GaussianDistribution(Distribution):
         self.half_inv_var = 0.5 / self.var
         self.log_const = 0.5 * np.log(2 * np.pi * self.var)
 
+    @property
+    def parameters(self):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        return (self.mean, self.var)
+
     def log_probability(self, points: float) -> float:
         """_summary_
 
@@ -195,13 +283,18 @@ class GaussianDistribution(Distribution):
             points (np.ndarray): _description_
             weights (_type_, optional): _description_. Defaults to None.
         """
+        # points can be 1 dimensional (single data point)
+        # or 2 dimensional (if we have a batch of points)
+        points = convert_to_array(points, ndims=1)
+
         if weights is None:
             weights = np.ones(points.shape[0])
+        else:
+            weights = convert_to_array(weights, ndims=1)
 
-        points = points.squeeze()
         self.summaries[0] += weights.sum()
         self.summaries[1] += weights.dot(points)
-        self.summaries[2] += weights.dot(points**2)
+        self.summaries[2] += weights.dot(points ** 2)
 
     def from_summaries(self, inertia=0.0):
         """_summary_
@@ -210,7 +303,7 @@ class GaussianDistribution(Distribution):
             inertia (float, optional): _description_. Defaults to 0.0.
         """
         new_mean = self.summaries[1] / self.summaries[0]
-        new_var = self.summaries[2] / self.summaries[0] - new_mean**2
+        new_var = self.summaries[2] / self.summaries[0] - new_mean ** 2
 
         self.mean = inertia * self.mean + (1 - inertia) * new_mean
         self.var = inertia * self.var + (1 - inertia) * new_var
@@ -220,10 +313,6 @@ class GaussianDistribution(Distribution):
         self.log_const = 0.5 * np.log(2 * np.pi * self.var)
 
         self.clear_summaries()
-
-    def clear_summaries(self):
-        """_summary_"""
-        self.summaries.fill(0)
 
     @classmethod
     def from_samples(cls, points, weights=None):
@@ -274,6 +363,15 @@ class MultivariateGaussianDistribution(Distribution):
             np.linalg.det(self.cov)
         )
 
+    @property
+    def parameters(self):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        return (self.mean.tolist(), self.cov.tolist())
+
     def log_probability(self, points: np.ndarray) -> float:
         """_summary_
 
@@ -300,8 +398,14 @@ class MultivariateGaussianDistribution(Distribution):
             points (np.ndarray): _description_
             weights (_type_, optional): _description_. Defaults to None.
         """
+        # points can be 1 dimensional (single data point)
+        # or 2 dimensional (if we have a batch of points)
+        points = convert_to_array(points, ndims=2)
+
         if weights is None:
             weights = np.ones(points.shape[0])
+        else:
+            weights = convert_to_array(weights, ndims=1)
 
         data = np.hstack([points, np.ones((points.shape[0], 1))])
         self.summaries += np.einsum("n, ni, nj -> ij", weights, data, data)
@@ -327,10 +431,6 @@ class MultivariateGaussianDistribution(Distribution):
         )
 
         self.clear_summaries()
-
-    def clear_summaries(self):
-        """_summary_"""
-        self.summaries.fill(0)
 
     @classmethod
     def from_samples(cls, points, weights=None):
@@ -379,6 +479,15 @@ class ARGaussianDistribution(Distribution):
         self.half_inv_var = 0.5 / var
         self.log_const = 0.5 * np.log(2 * np.pi * var)
 
+    @property
+    def parameters(self):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        return (self.mean, self.var, self.whitener[1:].tolist())
+
     def log_probability(self, points: np.ndarray) -> float:
         """_summary_
 
@@ -391,7 +500,7 @@ class ARGaussianDistribution(Distribution):
         # points can be 1 dimensional (single data point)
         # or 2 dimensional (if we have a batch of points)
         error = np.dot(points, self.whitener) - self.mean
-        log_prob = -self.log_const - self.half_inv_var * error**2
+        log_prob = -self.log_const - self.half_inv_var * error ** 2
         # if some are nan, then it's treated as missing data
         # simply return 0
         return handle_nan(log_prob)
@@ -403,8 +512,14 @@ class ARGaussianDistribution(Distribution):
             points (np.ndarray): _description_
             weights (_type_, optional): _description_. Defaults to None.
         """
+        # points can be 1 dimensional (single data point)
+        # or 2 dimensional (if we have a batch of points)
+        points = convert_to_array(points, ndims=2)
+
         if weights is None:
             weights = np.ones(points.shape[0])
+        else:
+            weights = convert_to_array(weights, ndims=1)
 
         data = np.hstack([points, np.ones((points.shape[0], 1))])
         self.summaries += np.einsum("n, ni, nj -> ij", weights, data, data)
@@ -431,10 +546,6 @@ class ARGaussianDistribution(Distribution):
         self.log_const = 0.5 * np.log(2 * np.pi * self.var)
 
         self.clear_summaries()
-
-    def clear_summaries(self):
-        """_summary_"""
-        self.summaries.fill(0)
 
     @classmethod
     def from_samples(cls, points, weights=None):
@@ -488,6 +599,19 @@ class MultivariateARGaussianDistribution(Distribution):
             np.linalg.det(self.cov)
         )
 
+    @property
+    def parameters(self):
+        """_summary_
+
+        Returns:
+            _type_: _description_
+        """
+        return (
+            self.mean.tolist(),
+            self.cov.tolist(),
+            -self.whitener[self.n_dims :].tolist(),
+        )
+
     def log_probability(self, points: np.ndarray) -> float:
         """_summary_
 
@@ -514,8 +638,14 @@ class MultivariateARGaussianDistribution(Distribution):
             points (np.ndarray): _description_
             weights (_type_, optional): _description_. Defaults to None.
         """
+        # points can be 1 dimensional (single data point)
+        # or 2 dimensional (if we have a batch of points)
+        points = convert_to_array(points, ndims=2)
+
         if weights is None:
             weights = np.ones(points.shape[0])
+        else:
+            weights = convert_to_array(weights, ndims=1)
 
         data = np.hstack([points, np.ones((points.shape[0], 1))])
         self.summaries += np.einsum("n, ni, nj -> ij", weights, data, data)
@@ -549,10 +679,6 @@ class MultivariateARGaussianDistribution(Distribution):
         )
 
         self.clear_summaries()
-
-    def clear_summaries(self):
-        """_summary_"""
-        self.summaries.fill(0)
 
     @classmethod
     def from_samples(cls, points, n_dims, weights=None):
