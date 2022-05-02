@@ -3,8 +3,39 @@ in a numerically stable way.
 """
 
 import numpy as np
-from scipy.special import logsumexp
 from numba import jit
+
+# from scipy.special import logsumexp
+
+
+@jit
+def logsumexp(metrics):
+    """_summary_
+
+    Args:
+        metrics (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    # Our implementation of logsumexp for 1D arrays is based on as single pass
+    # through the array. With numba's it help seemed to be a little faster
+    # than scipy's implementation.
+    output = -np.inf
+    gamma = 0.0
+    for metric in metrics:
+        delta = output - metric
+        if np.isnan(delta):
+            gamma += 1.0
+        elif delta < 0:
+            gamma = gamma * np.exp(delta) + 1.0
+            output = metric
+        else:
+            gamma += np.exp(-delta)
+
+    output += np.exp(gamma)  # softMax operation
+
+    return output, gamma
 
 
 @jit
@@ -250,21 +281,20 @@ class Reducer(BaseReducer):
         """
         if self.temperature != 1.0:
             metrics = metrics / self.temperature
-        self.output = logsumexp(metrics)  # softmax(metrics)
+        self.output, _ = logsumexp(metrics)
 
         if compute_softmax:
-            # first deal with corner cases:
-            if self.output == np.inf:
+            if np.isfinite(self.output):
+                # normal case (all finite)
+                self.log_softmax_pmf = metrics - self.output
+            elif self.output == np.inf:
+                # some metrics are +np.inf:
                 temp = metrics == np.inf
                 self.log_softmax_pmf.fill(-np.inf)
                 self.log_softmax_pmf[temp] = -np.log(sum(temp))
             elif self.output == -np.inf:
                 # all metrics must be -np.inf
                 self.log_softmax_pmf.fill(-np.log(self.num))
-            else:
-                # normal case (all finite)
-                self.log_softmax_pmf = metrics - self.output
-
         if self.temperature != 1.0:
             self.output *= self.temperature
 
