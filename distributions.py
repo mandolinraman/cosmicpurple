@@ -3,41 +3,7 @@
 
 
 import numpy as np
-
-
-def handle_nan(log_prob):
-    """_summary_
-
-    Args:
-        log_prob (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
-    if isinstance(log_prob, np.ndarray):
-        log_prob[log_prob == np.nan] = 0
-    elif np.isnan(log_prob):
-        log_prob = 0.0
-
-    return log_prob
-
-
-def convert_to_array(values, ndims=1, dtype=np.float64):
-    """_summary_
-
-    Args:
-        points (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
-
-    values = np.array(values, dtype=dtype)
-    assert values.ndim <= ndims
-    while values.ndim < ndims:
-        values = values[np.newaxis, ...]
-
-    return values
+from utils import handle_nan, convert_to_array
 
 
 class Distribution:
@@ -294,7 +260,7 @@ class GaussianDistribution(Distribution):
 
         self.summaries[0] += weights.sum()
         self.summaries[1] += weights.dot(points)
-        self.summaries[2] += weights.dot(points ** 2)
+        self.summaries[2] += weights.dot(points**2)
 
     def from_summaries(self, inertia=0.0):
         """_summary_
@@ -303,7 +269,7 @@ class GaussianDistribution(Distribution):
             inertia (float, optional): _description_. Defaults to 0.0.
         """
         new_mean = self.summaries[1] / self.summaries[0]
-        new_var = self.summaries[2] / self.summaries[0] - new_mean ** 2
+        new_var = self.summaries[2] / self.summaries[0] - new_mean**2
 
         self.mean = inertia * self.mean + (1 - inertia) * new_mean
         self.var = inertia * self.var + (1 - inertia) * new_var
@@ -500,7 +466,7 @@ class ARGaussianDistribution(Distribution):
         # points can be 1 dimensional (single data point)
         # or 2 dimensional (if we have a batch of points)
         error = np.dot(points, self.whitener) - self.mean
-        log_prob = -self.log_const - self.half_inv_var * error ** 2
+        log_prob = -self.log_const - self.half_inv_var * error**2
         # if some are nan, then it's treated as missing data
         # simply return 0
         return handle_nan(log_prob)

@@ -8,6 +8,41 @@ from numba import jit
 # from scipy.special import logsumexp
 
 
+def handle_nan(log_prob):
+    """_summary_
+
+    Args:
+        log_prob (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    if isinstance(log_prob, np.ndarray):
+        log_prob[log_prob == np.nan] = 0
+    elif np.isnan(log_prob):
+        log_prob = 0.0
+
+    return log_prob
+
+
+def convert_to_array(values, ndims=1, dtype=np.float64):
+    """_summary_
+
+    Args:
+        points (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    values = np.array(values, dtype=dtype)
+    assert values.ndim <= ndims
+    while values.ndim < ndims:
+        values = values[np.newaxis, ...]
+
+    return values
+
+
 @jit
 def logsumexp(metrics):
     """_summary_
@@ -19,7 +54,7 @@ def logsumexp(metrics):
         _type_: _description_
     """
     # Our implementation of logsumexp for 1D arrays is based on as single pass
-    # through the array. With numba's it help seemed to be a little faster
+    # through the array. With numba's help it seemed to be a little faster
     # than scipy's implementation.
     output = -np.inf
     gamma = 0.0
