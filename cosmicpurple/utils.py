@@ -68,7 +68,7 @@ def logsumexp(metrics):
         else:
             gamma += np.exp(-delta)
 
-    output += np.exp(gamma)  # softMax operation
+    output += np.log(gamma)  # softMax operation
 
     return output, gamma
 

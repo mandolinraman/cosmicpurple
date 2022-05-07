@@ -2,8 +2,7 @@
 import numpy as np
 
 import pomegranate as pom
-import distributions as di
-import sparsehmm as sh
+import cosmicpurple as cp
 import misc.nanoseek as ns
 
 
@@ -31,8 +30,8 @@ edges_hat = np.loadtxt("misc/wksp/edges_hat0.txt", int)[:N]
 num_edges = len(adjList)
 num_states = 1 + np.max(adjList)
 
-emitters = [di.GaussianDistribution(mu[t], rv[t]) for t in range(num_edges)]
-hmm = sh.SparseHMM(adjList, pc, emitters)
+emitters = [cp.GaussianDistribution(mu[t], rv[t]) for t in range(num_edges)]
+hmm = cp.SparseHMM(adjList, pc, emitters)
 
 # pomegranate
 pdist = [

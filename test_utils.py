@@ -1,7 +1,7 @@
 "utils.py tests"
 import numpy as np
 from scipy.special import logsumexp
-from utils import Reducer, MultiReducer, aggregate
+from cosmicpurple.utils import Reducer, MultiReducer, aggregate
 
 
 num = 10000

@@ -3,7 +3,7 @@
 
 
 import numpy as np
-from utils import Reducer, MultiReducer, aggregate
+from .utils import Reducer, MultiReducer, aggregate
 
 
 class SparseHMM:
