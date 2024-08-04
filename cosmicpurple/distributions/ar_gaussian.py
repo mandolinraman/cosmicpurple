@@ -33,7 +33,7 @@ class ARGaussianDistribution(Distribution):
         Returns:
             _type_: _description_
         """
-        return (self.mean, self.var, self.whitener[1:].tolist())
+        return (self.mean, self.var, (-self.whitener[1:]).tolist())
 
     def log_probability(self, points: np.ndarray) -> float:
         """_summary_

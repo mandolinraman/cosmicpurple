@@ -41,7 +41,7 @@ class MultivariateARGaussianDistribution(Distribution):
         return (
             self.mean.tolist(),
             self.cov.tolist(),
-            -self.whitener[self.n_dims :].tolist(),
+            (-self.whitener[self.n_dims :]).tolist(),
         )
 
     def log_probability(self, points: np.ndarray) -> float:

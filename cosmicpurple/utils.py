@@ -43,7 +43,7 @@ def convert_to_array(values, ndims=1, dtype=np.float64):
     return values
 
 
-@jit
+@jit(nopython=True)
 def logsumexp(metrics):
     """_summary_
 
@@ -73,7 +73,7 @@ def logsumexp(metrics):
     return output, gamma
 
 
-@jit
+@jit(nopython=True)
 def aggregate_simple(values, weights=None, small_weight=1e-30):
     """_summary_
 
@@ -96,7 +96,7 @@ def aggregate_simple(values, weights=None, small_weight=1e-30):
     return result
 
 
-@jit
+@jit(nopython=True)
 def aggregate(values, num_buckets, buckets, weights=None, small_weight=1e-30):
     """_summary_
 
@@ -120,7 +120,7 @@ def aggregate(values, num_buckets, buckets, weights=None, small_weight=1e-30):
     return result
 
 
-@jit
+@jit(nopython=True)
 def aggregate_max(
     metrics: np.ndarray,
     buckets: np.ndarray,
@@ -140,7 +140,7 @@ def aggregate_max(
             winners[bucket] = index
 
 
-@jit
+@jit(nopython=True)
 def aggregate_softmax(
     metrics, buckets, output, compute_softmax, log_softmax_pmf
 ):
@@ -180,7 +180,7 @@ def aggregate_softmax(
             )
 
 
-@jit
+@jit(nopython=True)
 def sample_pmf(pmf):
     """_summary_
 
@@ -202,7 +202,7 @@ def sample_pmf(pmf):
     return winner
 
 
-@jit
+@jit(nopython=True)
 def sample_multi_pmf(pmf, buckets, winners):
     """_summary_
 
